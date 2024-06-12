@@ -1,0 +1,1494 @@
+---
+title: "Publically Available Location Data"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r SETUP, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(sf)
+library(glue)
+library(janitor)
+library(ggplot2)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(lubridate)
+library(stringr)
+```
+
+Description: The following collates publicly available location data from the Global Biodiversity Information Facility (GBIF), Ocean Biodiversity Information System (OBIS), Spatial Ecological Analysis of Megavertebrate Populations (OBIS-SEAMAP), California Department of Fish and Wildlife, MoveBank, and Australian Antarctic Data Center). The cleanup process is broken up by non-tracking vs tracking data.
+
+To run the following code, you will need to download data from the available sources ahead of time. Specifically you will need to:
+
+1. Create a folder called 'Public Data' in local repo
+
+2. Download data from OBIS:
+    - url: *https://mapper.obis.org/?taxonid=137090,231405,137087,137088,242603,137086,137119,220222,137091,159023,137112,137089,254974,137092*
+    - download & save as 'OBIS' in 'Public Data'
+    
+3. Download data from GBIF:
+    - url: *https://www.gbif.org/occurrence/search?taxon_key=2440735&taxon_key=5220086&taxon_key=2440728&taxon_key=2440714&taxon_key=2440344&taxon_key=6165014&taxon_key=7194025&taxon_key=2440330&taxon_key=2440704&taxon_key=8123917&taxon_key=2440332&taxon_key=2440339&taxon_key=2440718&taxon_key=2440709&taxon_key=7759914*
+    - download & save as 'GBIF' in 'Public Data'
+    
+4. Download data from OBIS-SEAMAP:
+    - url:*https://seamap.env.duke.edu/*
+    - Add species of interest to map: "Balaenoptera acutorostrata", "Megaptera novaeangliae", "Balaenoptera physalus", "Balaenoptera musculus", "Balaenoptera borealis", "Physeter macrocephalus", "Eubalaena glacialis", "Eubalaena australis", "Balaenoptera brydei", "Balaena mysticetus", "Balaenoptera edeni", "Eschrichtius robustus", "Eubalaena japonica", "Balaenoptera musculus brevicauda", "Balaenoptera bonaerensis" 
+    - Click on Datasets & Save
+    - download & save as 'OBIS-SEAMAP' in 'Public Data'
+    - rename file with 'points.csv' in the name as 'obis_seamap_points.csv'
+
+5. Download data from California Department of Fish and Wildlife:
+    - url: *https://services2.arcgis.com/Uq9r85Potqm3MfRV/ArcGIS/rest/services/biosds761_fmu/FeatureServer/0*
+    - click 'Query' & input:
+        -Where: 1=1
+        -Outfields: *
+        -Ouput Geospatial Reference: 4326
+        -Format: GeoJson
+    - Copy results & save as geojson file. Convert to Shapefile using QGIS or other online tool
+    - Save as 'CDFW Shapefile' in 'Public Data'
+    
+6. Download data from Movebank:
+    - url: *https://www.movebank.org/cms/webapp?gwt_fragment=page=search_map*
+    - search for species of interest and download one study at a time
+    - upload all downloaded files to a folder called 'Movebank' in 'Public Data'
+    
+7. Download data from Australian Antarctic Data Center:
+    - url: *https://data.aad.gov.au/metadata/AAS_2941_blue_whale_Argos_sda_filter_tracks?search=datasets*
+    - download & save as 'Australian Antarctic Data Center' in 'Public Data'
+
+
+#NON-TRACKING DATA
+```{r OBIS Data}
+#Read in raw data & remove records that are flagged as on land:
+obis <-read.csv(here("OBIS", "Occurrence.csv")) %>% 
+  filter(!grepl('on_land', flags)) %>% 
+  filter(!grepl('ON_LAND', flags)) 
+
+#Separate datasets that are satellite tagging/tracking data (will be used below in tracking data steps)
+obis_tracking <- obis %>% 
+  filter(str_detect(datasetname, "satellite") | str_detect(samplingprotocol, "capture for bio-logging") | str_detect(datasetname, "Argos") | str_detect(datasetname, "telemetry") | occurrenceremarks == "Telemetry")
+
+obis_tracking_dataset_id <- unique(obis_tracking$dataset_id)
+
+#filter for not-tracking datasets & cleanup fields:
+obis_nontracking <- obis %>% 
+  filter(!dataset_id %in% obis_tracking_dataset_id) %>%  #filter for non-tracking datasets
+  mutate(datasetname = ifelse(datasetname != "", datasetname, dataset_id), #fill in missing datasetname with dataset ID
+         date_downloaded = "2021-11-25",
+         utc = case_when(str_detect(eventtime, pattern = "Z") ~ TRUE, #add field to indicate if timestamps were in UTC
+                         !str_detect(eventtime, pattern = "Z") ~ FALSE,
+                         is.na(eventtime) ~ FALSE),
+         eventdate = ifelse((eventdate == "" & !is.na(year)), year, eventdate), #fill in missing dates with year
+         species_common_nm= case_when( 
+           species %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale", 
+           species %in% "Balaenoptera musculus" ~ "Blue Whale",
+           species %in% "Balaena mysticetus" ~ "Bowhead Whale",
+           species %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+           species %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+           species %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+           species %in% "Balaenoptera physalus" ~ "Fin Whale",
+           species %in% "Eschrichtius robustus" ~ "Gray Whale",
+           species %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+           species %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+           species %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+           species %in% "Balaenoptera borealis" ~ "Sei Whale",
+           species %in% "Eubalaena australis" ~ "Southern Right Whale",
+           species %in% "Physeter macrocephalus" ~ "Sperm Whale"),
+         subspecies_cl = if_else(species == "Balaenoptera brydei", "Balaenoptera brydei", subspecies), #add field to indicate subspecies
+         species_cl = if_else(species == "Balaenoptera brydei", "Balaenoptera edeni", species),
+         rights = NA,
+         eventdate = as.character(eventdate),
+         source = "OBIS") %>% 
+  dplyr::select(-species, -subspecies) %>% 
+  dplyr::rename(species = species_cl,
+                subspecies = subspecies_cl,
+                issue = flags,
+                datasetName = datasetname, 
+                decimalLatitude = decimallatitude, 
+                decimalLongitude = decimallongitude, 
+                individualCount = individualcount, 
+                basisOfRecord = basisofrecord, 
+                coordinateUncertaintyInMeters = coordinateuncertaintyinmeters,
+                coordinatePrecision = coordinateprecision, 
+                occurrenceStatus = occurrencestatus, 
+                eventDate = eventdate, 
+                eventTime = eventtime, 
+                eventID = eventid, 
+                samplingProtocol = samplingprotocol, 
+                sampleSizeValue = samplesizevalue, 
+                sampleSizeUnit = samplesizeunit, 
+                samplingEffort = samplingeffort, 
+                startDayOfYear = startdayofyear, 
+                endDayOfYear = enddayofyear, 
+                footprintWKT = footprintwkt, 
+                footprintSRS = footprintsrs, 
+                rightsHolder = rightsholder, 
+                accessRights= accessrights,
+                parentEventID = parenteventid, 
+                fieldNumber = fieldnumber, 
+                fieldNotes = fieldnotes, 
+                eventRemarks = eventremarks, 
+                occurrenceID = occurrenceid, 
+                organismQuantity = organismquantity, 
+                organismQuantityType = organismquantitytype) %>% 
+  dplyr::select(datasetName, dataset_id, species, subspecies, species_common_nm, utc, 
+                decimalLatitude, decimalLongitude, individualCount, basisOfRecord, 
+                coordinateUncertaintyInMeters, coordinatePrecision, issue, occurrenceStatus, 
+                eventDate, eventTime, eventID, samplingProtocol, sampleSizeValue, sampleSizeUnit, 
+                samplingEffort, startDayOfYear, endDayOfYear, year, month, day, footprintWKT, 
+                footprintSRS, rightsHolder, accessRights, rights, license, parentEventID, 
+                fieldNumber, fieldNotes, eventRemarks, occurrenceID, organismQuantity, 
+                organismQuantityType, date_downloaded, source)
+```
+
+```{r GBIF Data}
+#Read in raw GBIF data & remove records that were flagged as having coordinates that were invalid or out of range for decimal lat/lon values, coordinate precisions that had high margin of uncertainty, coordinate reprojections that resulted in datums shift larger than 0.1 decimal degrees, invalid coordinate uncertainty, inaccurate/unlikely recording date , and null coordinates:
+gbif <- read.csv(here("GBIF", "occurrence.csv")) %>%
+  filter(!grepl('COORDINATE_INVALID', issue)) %>% 
+  filter(!grepl('COORDINATE_OUT_OF_RANGE', issue)) %>% 
+  filter(!grepl('COORDINATE_PRECISION_INVALID', issue)) %>% 
+  filter(!grepl('COORDINATE_REPROJECTION_SUSPICIOUS', issue)) %>% 
+  filter(!grepl('COORDINATE_UNCERTAINTY_METERS_INVALID', issue)) %>% 
+  filter(!grepl('RECORDED_DATE_UNLIKELY', issue)) %>% 
+  filter(!grepl('ZERO_COORDINATE', issue))
+
+#Separate datasets that are satellite tagging/tracking data (will be used below in tracking data steps)
+gbif_tracking <- gbif %>% 
+  filter(str_detect(datasetName, "satellite") | str_detect(samplingProtocol, "capture for bio-logging") | str_detect(datasetName, "Argos") | str_detect(datasetName, "telemetry") | occurrenceRemarks == "Telemetry")
+
+gbif_tracking_dataset_id <- unique(gbif_tracking$datasetKey)
+
+#filter for not-tracking datasets & cleanup fields:
+gbif_nontracking <- gbif %>% 
+  filter(!datasetKey %in% gbif_tracking_dataset_id) %>% #filter for non-tracking datasets
+  mutate(
+    datasetName = ifelse(datasetName != "", datasetName, datasetKey),  #fill in missing datasetname with dataset ID
+    date_downloaded = "2021-11-15", 
+    utc = case_when(str_detect(eventTime, pattern = "Z") ~ TRUE, #add field to indicate if timestamps were in UTC 
+                    !str_detect(eventTime, pattern = "Z") ~ FALSE,
+                    is.na(eventTime) ~ FALSE),
+    event_date = ifelse((eventDate == "" & dateIdentified != ""), dateIdentified, eventDate), #fill in missing dates with dateIdentified or verbatimeEventDate
+    eventDate = ifelse(datasetKey %in% c("67ed8ccb-682c-48cd-a2b7-63039296c186", "a9b174f6-6792-44c3-b5d0-ff83f6c938bc"), verbatimEventDate, event_date), 
+    species_common_nm = case_when(
+      species %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+      species %in% "Balaenoptera musculus" ~ "Blue Whale",
+      species %in% "Balaena mysticetus" ~ "Bowhead Whale",
+      species %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+      species %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+      species %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+      species %in% "Balaenoptera physalus" ~ "Fin Whale",
+      species %in% "Eschrichtius robustus" ~ "Gray Whale",
+      species %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+      species %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+      species %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+      species %in% "Balaenoptera borealis" ~ "Sei Whale",
+      species %in% "Eubalaena australis" ~ "Southern Right Whale",
+      species %in% "Physeter macrocephalus" ~ "Sperm Whale"),
+    subspecies = case_when(
+      infraspecificEpithet %in% "acutorostrata" ~ "Balaenoptera acutorostrata acutorostrata",
+      infraspecificEpithet %in% "australis" ~ "Megaptera novaeangliae australis",
+      infraspecificEpithet %in% "borealis" ~ "Balaenoptera borealis borealis",
+      infraspecificEpithet %in% "brevicauda" ~ "Balaenoptera musculus brevicauda",
+      infraspecificEpithet %in% "brydei" ~ "Balaenoptera edeni brydei",
+      infraspecificEpithet %in% "catodon" ~ "Physeter catodon catodon",
+      infraspecificEpithet %in% "davidsoni" ~ "Balaenoptera acutorostrata davidsoni",
+      infraspecificEpithet %in% "edeni" ~ "Balaenoptera edeni edeni",
+      infraspecificEpithet %in% "glacialis" ~ "Eubalaena glacialis glacialis",
+      infraspecificEpithet %in% "indica" ~ "Balaenoptera musculus indica",
+      infraspecificEpithet %in% "intermedia" ~ "Balaenoptera musculus intermedia",
+      infraspecificEpithet %in% "kuzira" ~ "Megaptera novaeangliae kuzira",
+      infraspecificEpithet %in% "musculus" ~ "Balaenoptera musculus musculus",
+      infraspecificEpithet %in% "novaeangliae" ~ "Megaptera novaeangliae novaeangliae",
+      infraspecificEpithet %in% "physalus" ~ "Balaenoptera physalus physalus",
+      infraspecificEpithet %in% "quoyi" ~ "Balaenoptera physalus quoyi",
+      infraspecificEpithet %in% "scammoni" ~ "Balaenoptera acutorostrata scammoni",
+      infraspecificEpithet %in% "schlegelii" ~ "Balaenoptera borealis schlegelii"),
+    event_date = as.character(event_date),
+    source = "GBIF") %>% 
+  dplyr::rename(dataset_id = datasetKey) %>% 
+  dplyr::select(datasetName, dataset_id, species, subspecies, species_common_nm, utc,
+                decimalLatitude, decimalLongitude, individualCount, basisOfRecord,
+                coordinateUncertaintyInMeters, coordinatePrecision, issue, occurrenceStatus,
+                eventDate, eventTime, eventID, samplingProtocol, sampleSizeValue,
+                sampleSizeUnit, samplingEffort, startDayOfYear, endDayOfYear, year, month,
+                day, footprintWKT, footprintSRS, rightsHolder, accessRights, rights, license,
+                parentEventID, fieldNumber, fieldNotes, eventRemarks, occurrenceID,
+                organismQuantity, organismQuantityType, date_downloaded, source)
+```
+
+```{r OBIS-SEAMAP Data}
+#Read in raw data 
+obis_seamap <- read.csv(here("OBIS-SEAMAP", "points.csv"))
+
+#Separate datasets that are satellite tagging/tracking data
+obis_seamap_tracking <- obis_seamap %>% 
+  filter(platform == "tag")
+
+#filter for not-tracking datasets & cleanup fields:
+obis_seamap_nontracking <- obis_seamap %>% 
+  filter(platform != "tag") %>% #filter for non-tracking datasets
+  mutate(date_time_temp = date_time) %>%   
+  separate(date_time_temp, into = c("event", "eventTime"), sep = " ") %>%  #separate date and time
+  mutate(
+    date_downloaded = "2022-07-25", 
+    utc = FALSE,
+    subspecies = case_when(
+      scientific %in% "Balaenoptera brydei" ~ "Balaenoptera edeni brydei",  #add field to indicate subspecies
+      scientific %in% "Balaenoptera musculus brevicauda" ~ "Balaenoptera musculus brevicauda"),
+    species_common_nm= case_when(
+      scientific %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+      scientific %in% "Balaenoptera musculus" ~ "Blue Whale",
+      scientific %in% "Balaena mysticetus" ~ "Bowhead Whale",
+      scientific %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+      scientific %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+      scientific %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+      scientific %in% "Balaenoptera physalus" ~ "Fin Whale",
+      scientific %in% "Eschrichtius robustus" ~ "Gray Whale",
+      scientific %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+      scientific %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+      scientific %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+      scientific %in% "Balaenoptera borealis" ~ "Sei Whale",
+      scientific %in% "Eubalaena australis" ~ "Southern Right Whale",
+      scientific %in% "Physeter macrocephalus" ~ "Sperm Whale",
+      scientific %in% "Balaenoptera musculus brevicauda" ~ "Blue Whale"),
+    species = if_else(scientific == "Balaenoptera brydei", "Balaenoptera edeni", scientific),
+    species = if_else(species == "Balaenoptera musculus brevicauda", "Balaenoptera musculus", species),
+    datasetName = case_when( 
+      dataset_id == 1 ~ "SEFSC Atlantic surveys, 1998 (3)",  #manually add dataset name based on dataset ID
+      dataset_id == 3 ~ "SEFSC Atlantic surveys 1992",
+      dataset_id == 5 ~ "SEFSC Atlantic surveys 1999",
+      dataset_id == 7 ~ "SEFSC Caribbean Survey 2000",
+      dataset_id == 11 ~ "SEFSC Caribbean Survey 1995",
+      dataset_id == 13 ~ "SEFSC GoMex Oceanic 1992 (199)",
+      dataset_id == 15 ~ "SEFSC GoMex Oceanic 1993 (W)",
+      dataset_id == 17 ~ "SEFSC GoMex Oceanic 1993 (S)",
+      dataset_id == 19 ~ "SEFSC GoMex Oceanic 1994",
+      dataset_id == 21 ~ "SEFSC GoMex Oceanic 2000",
+      dataset_id == 23 ~ "SEFSC GoMex Oceanic 2001",
+      dataset_id == 25 ~ "SEFSC GoMex Oceanic 1996",
+      dataset_id == 27 ~ "SEFSC GoMex Oceanic 1997",
+      dataset_id == 29 ~ "SEFSC GoMex Oceanic 1999",
+      dataset_id == 33 ~ "SEFSC Gomex Shelf 2001",
+      dataset_id == 35 ~ "SEFSC Gomex Shelf 1994",
+      dataset_id == 37 ~ "SEFSC Gomex Shelf 2000",
+      dataset_id == 40 ~ "MMS High Altitude Survey 1980-1983",
+      dataset_id == 41 ~ "MMS Low Altitude Survey 1980-1983",
+      dataset_id == 42 ~ "MMS Ship Survey, PNW 1989",
+      dataset_id == 45 ~ "MMS Marine Mammal Survey, PNW 1989-1990",
+      dataset_id == 46 ~ "MMS Aerial Survey, PNW 1989-1990",
+      dataset_id == 47 ~ "Aerial Oil Spill Response Survey 1994-1997",
+      dataset_id == 49 ~ "MMS Seabird Ecology Study 1985",
+      dataset_id == 50 ~ "MMS High Altitude Survey, SCB 1975-1978",
+      dataset_id == 51 ~ "MMS Low Altitude Survey for Mammals, Southern California Bight 1975-1978",
+      dataset_id == 52 ~ "MMS Ship survey, SCB 1975-1978",
+      dataset_id == 53 ~ "MMS Surveys, SCB 1995-1997",
+      dataset_id == 56 ~ "NEFSC 1995 AJ9501 (Part I)",
+      dataset_id == 58 ~ "NEFSC Survey 1997",
+      dataset_id == 60 ~ "NEFSC Survey 1998 1",
+      dataset_id == 62 ~ "NEFSC Survey 1998 2",
+      dataset_id == 64 ~ "UK Royal Navy Marine Mammal Observations",
+      dataset_id == 65 ~ "UNCW Marine Mammal Sightings 2001",
+      dataset_id == 66 ~ "UNCW Marine Mammal Sightings 1998-1999",
+      dataset_id == 67 ~ "UNCW Marine Mammal Sightings 2002",
+      dataset_id == 72 ~ "Allied Finback Whale Catalogue",
+      dataset_id == 73 ~ "Allied Humpback Whale Catalogue, 1976 - 2003",
+      dataset_id == 86 ~ "SEFSC Southeast Cetacean Aerial Survey 1995",
+      dataset_id == 87 ~ "SEFSC Southeast Cetacean Aerial Survey 1992",
+      dataset_id == 95 ~ "SIO Marine Bird and Mammal Survey 2003",
+      dataset_id == 96 ~ "Gomex Sperm Whale Survey 2000",
+      dataset_id == 99 ~ "Cascadia Research Blue Whale Photo IDs for US West Coast, 1972-2004",
+      dataset_id == 107 ~ "NEFSC Aerial Survey - Experimental 2002",
+      dataset_id == 109 ~ "NEFSC Aerial Survey - Summer 1995",
+      dataset_id == 111 ~ "NEFSC Survey 1991",
+      dataset_id == 113 ~ "NEFSC Aerial Survey - Summer 1998",
+      dataset_id == 115 ~ "NMML Small Cetacean Aerial Survey 1997",
+      dataset_id == 116 ~ "NMML Small Cetacean Aerial Survey 1998",
+      dataset_id == 117 ~ "NMML Small Cetacean Aerial Survey 1999",
+      dataset_id == 122 ~ "NMML Bering Sea Cetacean Survey 2000",
+      dataset_id == 123 ~ "NMML Bering Sea Cetacean Survey 1999",
+      dataset_id == 128 ~ "NMML Harbor Porpoise Aerial Survey, Bristol Bay, Replicate 1, 1991",
+      dataset_id == 129 ~ "NMML Harbor Porpoise Aerial Survey, Bristol Bay, Replicate 2, 1991",
+      dataset_id == 130 ~ "NMML Harbor Porpoise Aerial Survey, Bristol Bay, Replicate 3, 1991",
+      dataset_id == 131 ~ "NMML Harbor Porpoise Aerial Survey, Cook Inlet, 1991",
+      dataset_id == 132 ~ "NMML Harbor Porpoise Aerial Survey, Kodiak Island, Replicate 1, 1992",
+      dataset_id == 133 ~ "NMML Harbor Porpoise Aerial Survey, Kodiak Island, Replicate 2, 1992",
+      dataset_id == 134 ~ "NMML Harbor Porpoise Aerial Survey, Kodiak Island, Replicate 3, 1992",
+      dataset_id == 135 ~ "NMML Harbor Porpoise Aerial Survey, Alaska Peninsula, Replicate 1, 1992",
+      dataset_id == 136 ~ "NMML Harbor Porpoise Aerial Survey, Alaska Peninsula, Replicate 2, 1992",
+      dataset_id == 137 ~ "NMML Killer Whale Vessel Survey, Alaska Peninsula, 1992 ",
+      dataset_id == 138 ~ "NMML Killer Whale Vessel, Alaska Peninsula 1993",
+      dataset_id == 139 ~ "NMML Harbor Porpoise Aerial Survey, SE Alaska, Replicate 1, 1993",
+      dataset_id == 140 ~ "NMML Harbor Porpoise Aerial Survey, SE Alaska, Replicate 2, 1993",
+      dataset_id == 141 ~ "NMML Harbor Porpoise Aerial Survey, SE Alaska, Replicate 3, 1993",
+      dataset_id == 144 ~ "NMML Killer Whale Vessel, Bering Sea, 1992",
+      dataset_id == 146 ~ "NMML Harbor Porpoise Vessel Survey, SE Alaska, Spring 1991",
+      dataset_id == 147 ~ "NMML Harbor Porpoise Vessel, SE Alaska, Spring 1992",
+      dataset_id == 148 ~ "NMML Harbor Porpoise Vessel, SE Alaska, Spring 1993",
+      dataset_id == 149 ~ "NMML Harbor Porpoise Vessel Survey, SE Alaska, Summer 1991",
+      dataset_id == 150 ~ "NMML Harbor Porpoise Vessel Survey, SE Alaska, Summer 1992",
+      dataset_id == 151 ~ "NMML Harbor Porpoise Vessel, SE Alaska, Summer 1993",
+      dataset_id == 152 ~ "NMML Harbor Porpoise Vessel Survey, SE Alaska, Fall 1991",
+      dataset_id == 153 ~ "NMML Harbor Porpoise Vessel, SE Alaska, Fall 1992",
+      dataset_id == 154 ~ "NMML Harbor Porpoise Vessel, SE Alaska, Fall 1993",
+      dataset_id == 155 ~ "NMML Killer Whale Vessel, Kodiak Island, 1992",
+      dataset_id == 156 ~ "NMML Killer Whale Vessel, Kodiak Island, 1993",
+      dataset_id == 187 ~ "SWFSC Marine Mammal Survey, MOPS 1986, Cruise 0989",
+      dataset_id == 189 ~ "SWFSC Marine Mammal Survey, MOPS 1986, Cruise 0990",
+      dataset_id == 191 ~ "SWFSC Marine Mammal Survey, MOPS 1987, Cruise 1080",
+      dataset_id == 193 ~ "SWFSC Marine Mammal Survey, MOPS 1987, Cruise 1081",
+      dataset_id == 195 ~ "SWFSC Marine Mammal Survey, MOPS 1988, Cruise 1164",
+      dataset_id == 197 ~ "SWFSC Marine Mammal Survey, MOPS 1988, Cruise 1165",
+      dataset_id == 199 ~ "SWFSC Marine Mammal Survey, MOPS 1989, Cruise 1267",
+      dataset_id == 201 ~ "SWFSC Marine Mammal Survey, MOPS 1989, Cruise 1268",
+      dataset_id == 203 ~ "SWFSC Marine Mammal Survey, MOPS 1990, Cruise 1369",
+      dataset_id == 205 ~ "SWFSC Marine Mammal Survey, MOPS 1990, Cruise 1370",
+      dataset_id == 207 ~ "SWFSC Marine Mammal Survey, CAMMS 1991, Cruise 1426",
+      dataset_id == 209 ~ "SWFSC Marine Mammal Survey, PODS 1992, Cruise 1467",
+      dataset_id == 211 ~ "SWFSC Marine Mammal Survey, PODS 1992, Cruise 1468",
+      dataset_id == 213 ~ "SWFSC Marine Mammal Survey, PODS 1993, Cruise 1508",
+      dataset_id == 215 ~ "SWFSC Marine Mammal Survey, PODS 1993, Cruise 1509",
+      dataset_id == 217 ~ "SWFSC Marine Mammal Survey, CADDIS 1995, Cruise 1601",
+      dataset_id == 219 ~ "SWFSC Marine Mammal Survey, ORCAWALE 1996, Cruise 1604",
+      dataset_id == 221 ~ "SWFSC Marine Mammal Survey, ORCAWALE 1996, Cruise 1605",
+      dataset_id == 227 ~ "SIO Marine Bird and Mammal Survey 2004",
+      dataset_id == 229 ~ "WADFW PSAMP S1992",
+      dataset_id == 230 ~ "WADFW PSAMP S1993",
+      dataset_id == 235 ~ "WADFW PSAMP S1998",
+      dataset_id == 272 ~ "UNCW Aerial Survey 1998-1999",
+      dataset_id == 274 ~ "YoNAH Encounter",
+      dataset_id == 280 ~ "PIROP Northwest Atlantic 1965-1992",
+      dataset_id == 283 ~ "BLM CETAP AIR Sightings",
+      dataset_id == 284 ~ "BLM CETAP OPP Sightings",
+      dataset_id == 285 ~ "BLM CETAP SHIP Sightings",
+      dataset_id == 288 ~ "NEFSC Harbor Porpoise 1991",
+      dataset_id == 290 ~ "NEFSC 1995  AJ9501 (Part II)",
+      dataset_id == 292 ~ "NEFSC Deepwater Marine Mammal 2002",
+      dataset_id == 294 ~ "NEFSC 1995 pe9502",
+      dataset_id == 296 ~ "NEFSC 1995 pe9501",
+      dataset_id == 300 ~ "NEFSC 1999 aj9902",
+      dataset_id == 302 ~ "Harbor Porpoise Survey 1992 (AJ92-01)",
+      dataset_id == 306 ~ "Sargasso sperm whales 2004",
+      dataset_id == 327 ~ "Bahamas Marine Mammal Research Organisation Strandings",
+      dataset_id == 328 ~ "Bahamas Marine Mammal Research Organisation On-transect Sightings",
+      dataset_id == 329 ~ "Bahamas Marine Mammal Research Organisation Opportunistic Sightings",
+      dataset_id == 330 ~ "Bahamas Marine Mammal Research Organisation Aerial Survey",
+      dataset_id == 332 ~ "Sargasso 2005 - cetacean sightings",
+      dataset_id == 360 ~ "UNCW Right Whale Aerial Survey 05-06",
+      dataset_id == 386 ~ "Sperm whales off Peru during IMARPE surveys (1995-2002)",
+      dataset_id == 396 ~ "NEFSC Mid-Atlantic Marine Mammal Abundance Survey 2004",
+      dataset_id == 398 ~ "NEFSC Aerial Circle-Back Abundance Survey 2004",
+      dataset_id == 400 ~ "UNCW Marine Mammal Aerial Surveys 2006-2007",
+      dataset_id == 423 ~ "Harbour porpoises, white-beaked dolphins and minke whales in North Sea - Land surveys -",
+      dataset_id == 425 ~ "Harbour porpoises, white-beaked dolphins and minke whales in North Sea - Vessel surveys -",
+      dataset_id == 427 ~ "JNCC seabird distribution and abundance data (all trips) from ESAS database",
+      dataset_id == 429 ~ "Alnitak-Alnilam Cetaceans and sea turtles surveys off Southern Spain",
+      dataset_id == 432 ~ "Whale Watch Azores Bryde's whale 2004",
+      dataset_id == 460 ~ "Mingan Island Cetacean Study 84-07",
+      dataset_id == 461 ~ "Cetacean survey in Balabac Strait, Philippines",
+      dataset_id == 463 ~ "Cetacean distribution around Mayotte Island",
+      dataset_id == 464 ~ "UNCW Right Whale Aerial Surveys 2008",
+      dataset_id == 466 ~ "Visual and genetic surveys for odontocete cetaceans in American Samoa 2003-06",
+      dataset_id == 467 ~ "Cascadia Research Collective Hawaii OASIS project whale and dolphin sightings",
+      dataset_id == 468 ~ "Cetaceans in the Southern Indian Ocean 2004",
+      dataset_id == 482 ~ "Abundance and distribution of cetaceans in the state of Aragua, Venezuela",
+      dataset_id == 502 ~ "Virginia Aquarium Marine Mammal Strandings 1988-2008",
+      dataset_id == 507 ~ "CalCOFI and NMFS Seabird and Marine Mammal Observation Data, 1987-2006",
+      dataset_id == 509 ~ "NEFSC Marine Mammal Abundance Cruise 2004 Passive Acoustic Monitoring - Rainbow Click Detections",
+      dataset_id == 511 ~ "Lamont-Doherty/LGL/NSF cruises",
+      dataset_id == 513 ~ "NEFSC Right Whale Aerial Survey",
+      dataset_id == 558 ~ "GREC Cetacean Sightings 1996-2002",
+      dataset_id == 561 ~ "New record of the humpback whale in the Adriatic Sea in 2009",
+      dataset_id == 586 ~ "USWTR Onslow Bay Aerial Survey -Left side- 2008-2010",
+      dataset_id == 590 ~ "USWTR JAX Aerial Survey -Left side- 2009-2010",
+      dataset_id == 592 ~ "USWTR JAX Aerial Survey -Right side- 2009-2010",
+      dataset_id == 596 ~ "Cetacean observations in Avacha Gulf 2005-2009",
+      dataset_id == 597 ~ "Cetacean observations in the waters of Karaginsky Island and Beringa Island in 2009",
+      dataset_id == 598 ~ "Land-based observations of cetaceans in the waters of Beringa Island in 2007-2009",
+      dataset_id == 647 ~ "CRRU Cetacean sighting in Scotland waters 1997-2015",
+      dataset_id == 650 ~ "Deep Panuke whale sightings 2003",
+      dataset_id == 651 ~ "Deep Panuke whale Acoustic 2003",
+      dataset_id == 656 ~ "Marine mammal sightings off Gal√°pagos",
+      dataset_id == 662 ~ "OceanCare cetacean sightings 2001-2014",
+      dataset_id == 664 ~ "DECAF - PMFR Minke Whales - Multiple Sensor - Boing Associations",
+      dataset_id == 666 ~ "DECAF - PMFR Minke Whales - Multiple Sensor - Manual Boing Detections",
+      dataset_id == 668 ~ "DECAF - PMFR Minke Whales - Multiple Sensor - Automated Boing Detections",
+      dataset_id == 675 ~ "DECAF - PMFR Minke Whales - Multiple Sensor - Boing Localizations",
+      dataset_id == 677 ~ "DECAF - AUTEC Beaked whales - Multiple Sensors - Click counts",
+      dataset_id == 680 ~ "DECAF - AUTEC Sperm Whales - Multiple Sensors - Samples",
+      dataset_id == 682 ~ "DECAF - AUTEC Sperm Whales - Multiple Sensors - Complete Dataset",
+      dataset_id == 687 ~ "UNCW USWTR JAX Aerial Surveys May - Oct 2010 - Left side",
+      dataset_id == 701 ~ "GVI Mexico Coral Reef Monitoring",
+      dataset_id == 704 ~ "POPA cetacean, seabird, and sea turtle sightings in the Azores area 1998-2015",
+      dataset_id == 708 ~ "Multi-species marine sighting survey in Golfo Dulce, Costa Rica, Jan-Feb 2010",
+      dataset_id == 709 ~ "Marybio Foundation marine mammal shipboard sightings in Bahia San Antonio, Patagonia 2008-2010",
+      dataset_id == 710 ~ "Marybio Foundation marine mammal aerial sightings in Bahia San Antonio, Patagonia 2008-2010",
+      dataset_id == 713 ~ "Cetacean observations in the Indian Ocean Sanctuary and the South China Sea, Mauritius to the Philippines, April 1999",
+      dataset_id == 726 ~ "Cetacean occurrence off the west central Portugal coast from boat-based surveys 2007-2008",
+      dataset_id == 731 ~ "United Kingdom National Whale Stranding Database 1913-2008",
+      dataset_id == 732 ~ "CE.TU.S. research cetacean sightings in the North Tuscany and Tuscan Archipelago waters, 1997-2011",
+      dataset_id == 745 ~ "USWTR JAX Aerial Survey -Left side- 2010-2011",
+      dataset_id == 747 ~ "USWTR JAX Aerial Survey -Right side- 2010-2011",
+      dataset_id == 749 ~ "USWTR Onslow Bay Aerial Survey -Left side- 2010-2011",
+      dataset_id == 751 ~ "USWTR Onslow Bay Aerial Survey -Right side- 2010-2011",
+      dataset_id == 756 ~ "SOCAL Marine Mammal Aerial Monitoring 2008-2009",
+      dataset_id == 761 ~ "Acquario di Genova, Delfini Metropolitani Project, cetacean sightings 2001-2009",
+      dataset_id == 774 ~ "Tethys Research Institute shipboard survey cetacean sightings 1986-2012",
+      dataset_id == 776 ~ "Tethys Research Institute aerial survey cetacean sightings 2009-2011",
+      dataset_id == 781 ~ "Gulf of Maine humpback whale satellite tagging project: 2011",
+      dataset_id == 784 ~ "Opportunistic marine mammal sightings near Pemba, Mozambique",
+      dataset_id == 792 ~ "CalCOFI marine mammal surveys 2004-2008 - on effort",
+      dataset_id == 794 ~ "CalCOFI marine mammal surveys 2004-2008 - off effort",
+      dataset_id == 807 ~ "SMRU sperm whale distribution around the Balearic Islands 2003-2008",
+      dataset_id == 810 ~ "BOEM Sperm Whale Seismic Study (SWSS) S-Tag Argos Telemetry",
+      dataset_id == 812 ~ "Jonian Dolphin Conservation di Taranto marine mammal sightings 2009-2012",
+      dataset_id == 819 ~ "IMMRAC marine mammal sightings from the Mediterranean's Levantine Basin",
+      dataset_id == 820 ~ "NMML Gulf of Alaska marine mammal survey 2003",
+      dataset_id == 821 ~ "NMML 2002-2010 Bering Sea Shelf Cetacean Survey",
+      dataset_id == 825 ~ "Marine mammal aerial surveys in the Bering, Chukchi and Beaufort Seas 1979-2010",
+      dataset_id == 829 ~ "Historical strandings of cetaceans on the Portuguese coast",
+      dataset_id == 830 ~ "Bottlenose Dolphin Research Institute (BDRI) cetacean sightings 2011",
+      dataset_id == 835 ~ "Bryde‚Äôs whales off eastern Venezuela - Vessel 1978-1979",
+      dataset_id == 836 ~ "Bryde‚Äôs whales off eastern Venezuela - Aerial 1978-1979",
+      dataset_id == 839 ~ "Cetacean sightings off Turkey 2006-2011",
+      dataset_id == 840 ~ "CIRCE Marine mammals off Spain 2001-2012",
+      dataset_id == 851 ~ "AFAST Hatteras Aerial Survey -Left side- 2011-2012",
+      dataset_id == 855 ~ "AFAST Hatteras Aerial Survey -Right side- 2011-2012",
+      dataset_id == 859 ~ "USWTR JAX Aerial Survey -Right side- 2011-2012",
+      dataset_id == 861 ~ "Gray Whales Count annual survey of northbound migration in Santa Barbara Channel, California 2011-2012",
+      dataset_id == 865 ~ "Adriatic Shipping Company marine mammal sightings in the Adriatic Sea 1988-2000",
+      dataset_id == 870 ~ "VACAPES FIREX and ASW Aerial Monitoring 2010",
+      dataset_id == 876 ~ "University of Valencia cetacean surveys in the Spanish Mediterranean 2000-2003",
+      dataset_id == 883 ~ "Gulf of Maine humpback whale satellite tagging project: 2012",
+      dataset_id == 885 ~ "Historical distribution of whales shown by logbook records 1785-1913",
+      dataset_id == 888 ~ "Long-Distance Movement of a Sei Whale in the North Atlantic, 2005",
+      dataset_id == 892 ~ "North Atlantic right whale up-calls in Stellwagen Bank National Marine Sanctuary 2006-2007",
+      dataset_id == 896 ~ "CRESLI marine mammal observations from whale watch cruises 2000-2019",
+      dataset_id == 903 ~ "BOEM Sperm Whale Seismic Study (SWSS) S-Tag cetacean sightings 2002-2004",
+      dataset_id == 904 ~ "BOEM Sperm Whale Seismic Study (SWSS) S-Tag sperm whale trackings 2002-2004",
+      dataset_id == 905 ~ "BOEM Sperm Whale Seismic Study (SWSS) S-Tag cetacean sightings 2005",
+      dataset_id == 906 ~ "DUML vessel-based photo-id and biopsy surveys for proposed JAX USWTR site 2012-2015",
+      dataset_id == 907 ~ "DUML vessel-based photo-id and biopsy surveys in VACAPES OPAREA off Hatteras 2009, 2011-2015",
+      dataset_id == 910 ~ "BOEM Sperm Whale Seismic Study (SWSS) PhotoID 2002-2005",
+      dataset_id == 912 ~ "BOEM Sperm Whale Seismic Study (SWSS) MPS sperm whale trackings 2004-2005",
+      dataset_id == 914 ~ "Acoustic detections of Arctic mammals in the western Beaufort Sea 2010-2011",
+      dataset_id == 916 ~ "HRC Koa Kai-11 Marine Species Monitoring Vessel Surveys November 2010",
+      dataset_id == 917 ~ "HRC Koa Kai-11 Marine Species Monitoring Aerial Surveys November 2010",
+      dataset_id == 918 ~ "MIRC Guam Marine Species Monitoring Winter-Spring Surveys 2012",
+      dataset_id == 922 ~ "HRC SCC Aerial-based Ship-follow Surveys February 2011",
+      dataset_id == 923 ~ "HRC SCC Aerial-based Transect Surveys February 2011",
+      dataset_id == 924 ~ "HRC SCC Aerial Shoreline Surveys February 2011",
+      dataset_id == 925 ~ "HRC USWEX Aerial-based Shoreline Surveys February and March 2011",
+      dataset_id == 927 ~ "HRC SCC Aerial Shoreline Surveys February 2012",
+      dataset_id == 928 ~ "HRC Vessel Survey off Kaua'i, January 2012",
+      dataset_id == 945 ~ "Mystic Aquarium's marine mammal and sea turtle stranding data 1976-2011",
+      dataset_id == 971 ~ "Blue Whale Study aerial surveys, southern Australia 2002-2007",
+      dataset_id == 972 ~ "Cetacean sightings in the north western Mediterranean Sea by EcoOc√©an Institute and partners 1994-2011",
+      dataset_id == 1006 ~ "Opportunistic marine mammal sightings from commercial whale watching vessels, Montauk, New York 1981-1994",
+      dataset_id == 1007 ~ "US Navy marine mammal and sea turtle sightings from aerial surveys, Vieques, Puerto Rico 2000",
+      dataset_id == 1017 ~ "VACAPES MISSELEX Aerial Monitoring March 2013",
+      dataset_id == 1028 ~ "SWFSC Marine Mammal Survey, SWAPS 1997, Cruise 1607",
+      dataset_id == 1030 ~ "Cetacean sightings along the catalan coast",
+      dataset_id == 1031 ~ "SWFSC Marine Mammal Survey, Vaquita 1997, Cruise 1608",
+      dataset_id == 1033 ~ "SWFSC Marine Mammal Survey, STAR 1998, Cruise 1610",
+      dataset_id == 1035 ~ "SWFSC Marine Mammal Survey, STAR 1998, Cruise 1611",
+      dataset_id == 1037 ~ "SWFSC Marine Mammal Survey, STAR 1998, Cruise 1612",
+      dataset_id == 1039 ~ "SWFSC Marine Mammal Survey, STAR 1999, Cruise 1613",
+      dataset_id == 1041 ~ "SWFSC Marine Mammal Survey, STAR 1999, Cruise 1614",
+      dataset_id == 1043 ~ "SWFSC Marine Mammal Survey, STAR 2000, Cruise 1615",
+      dataset_id == 1045 ~ "SWFSC Marine Mammal Survey, STAR 2000, Cruise 1616",
+      dataset_id == 1047 ~ "SWFSC Marine Mammal Survey, ORCAWALE 2001, Cruise 1617",
+      dataset_id == 1049 ~ "SWFSC Marine Mammal Survey, ORCAWALE 2001, Cruise 1619",
+      dataset_id == 1051 ~ "SWFSC Marine Mammal Survey, STAR 2003, Cruise 1623",
+      dataset_id == 1053 ~ "SWFSC Marine Mammal Survey, STAR 2003, Cruise 1624",
+      dataset_id == 1055 ~ "SWFSC Marine Mammal Survey, CSCAPE 2005, Cruise 1627",
+      dataset_id == 1057 ~ "SWFSC Marine Mammal Survey, CSCAPE 2005, Cruise 1628",
+      dataset_id == 1059 ~ "SWFSC Marine Mammal Survey, STAR 2006, Cruise 1630",
+      dataset_id == 1061 ~ "SWFSC Marine Mammal Survey, STAR 2006, Cruise 1631",
+      dataset_id == 1063 ~ "SWFSC Marine Mammal Survey, STAR-LITE 2007, Cruise 1634",
+      dataset_id == 1065 ~ "SWFSC Marine Mammal Survey, ORCAWALE 2008, Cruise 1635",
+      dataset_id == 1067 ~ "SWFSC Marine Mammal Survey, Vaquita 2008, Cruise 1637",
+      dataset_id == 1069 ~ "SWFSC Marine Mammal Survey, Delphinus 2009, Cruise 1640",
+      dataset_id == 1071 ~ "Norfolk/VA Beach Inshore Vessel Surveys",
+      dataset_id == 1072 ~ "Norfolk/VA Beach MINEX Vessel Surveys",
+      dataset_id == 1077 ~ "Macalester College marine mammal sightings around Grenada, West Indies 1999",
+      dataset_id == 1078 ~ "Visual contacts from research cruises in the Med sea, 1994-2001",
+      dataset_id == 1110 ~ "TGS Seismic Survey Visual Sightings in Chukchi Sea 2013",
+      dataset_id == 1112 ~ "TGS Seismic Survey Acoustic Detections in Chukchi Sea 2013",
+      dataset_id == 1116 ~ "Acoustic detections of sperm whales from research cruises in the Med sea, 1994-2001",
+      dataset_id == 1138 ~ "AFTT Hatteras Aerial Survey -Left side- 2012-2013",
+      dataset_id == 1140 ~ "AFTT Hatteras Aerial Survey -Right side- 2012-2013",
+      dataset_id == 1144 ~ "DFO Maritimes Region Cetacean Sightings",
+      dataset_id == 1150 ~ "SCANS II cetacean sightings on primary platform of vessel surveys 2005",
+      dataset_id == 1152 ~ "SCANS II cetacean sightings on tracker platform of vessel surveys 2005",
+      dataset_id == 1153 ~ "SCANS II cetacean sightings from aerial surveys 2005",
+      dataset_id == 1158 ~ "Visual sightings from Song of the Whale 1993-2013",
+      dataset_id == 1165 ~ "GOALS Vessel Surveys June - July 2013",
+      dataset_id == 1180 ~ "CODA cetacean sightings on primary platform of vessel surveys 2007",
+      dataset_id == 1182 ~ "CODA cetacean sightings on tracker platform of vessel surveys 2007",
+      dataset_id == 1183 ~ "SCANS I cetacean sightings 1994",
+      dataset_id == 1187 ~ "HRC KB26 Shoreline Aerial Surveys Jan-Feb 2014",
+      dataset_id == 1190 ~ "Marine mammal records of Cuba",
+      dataset_id == 1192 ~ "Virginia CZM Wind Energy Area Survey- Left side - November 2012 through April 2014",
+      dataset_id == 1194 ~ "Virginia CZM Wind Energy Area Survey- Right side - November 2012 through April 2014",
+      dataset_id == 1196 ~ "Virginia CZM Wind Energy Area Survey- Vessel Survey Sightings - November 2012 through April 2014",
+      dataset_id == 1201 ~ "Virginia and Maryland Sea Turtle Research and Conservation Initiative Aerial Survey Sightings, May 2011 through July 2013",
+      dataset_id == 1229 ~ "Virginia CZM Wind Energy Area Survey - Left side - May 2014 through December 2014",
+      dataset_id == 1233 ~ "AMAPPS Northeast Aerial Cruise Summer 2011",
+      dataset_id == 1235 ~ "AFTT Cape Hatteras Aerial Survey -Right side- 2014",
+      dataset_id == 1237 ~ "AFTT Cape Hatteras Aerial Survey -Left side- 2014",
+      dataset_id == 1239 ~ "AFTT JAX Aerial Survey -Right side- 2014",
+      dataset_id == 1241 ~ "AFTT JAX Aerial Survey -Left side- 2014",
+      dataset_id == 1243 ~ "AMAPPS Northeast Aerial Cruise Winter 2011",
+      dataset_id == 1245 ~ "AMAPPS Northeast Aerial Cruise Fall 2012",
+      dataset_id == 1247 ~ "AMAPPS Northeast Aerial Cruise Spring 2012",
+      dataset_id == 1249 ~ "AMAPPS Northeast Aerial Cruise Summer 2010",
+      dataset_id == 1259 ~ "AMAPPS Southeast Aerial Cruise Spring 2012",
+      dataset_id == 1261 ~ "LTER Antarctic satellite telemetry of humpback whales",
+      dataset_id == 1263 ~ "Cetacean coordinated transborder monitoring using ferries as platforms of observation off Tunisia 2013-2014 - Atutax",
+      dataset_id == 1264 ~ "Cetacean coordinated transborder monitoring using ferries as platforms of observation off Tunisia 2013-2014 - Ketos",
+      dataset_id == 1269 ~ "AMAPPS Northeast Shipboard Cruise Summer 2011",
+      dataset_id == 1271 ~ "AMAPPS Northeast Shipboard Cruise Summer 2013",
+      dataset_id == 1273 ~ "AMAPPS Southeast Aerial Cruise Summer 2010",
+      dataset_id == 1275 ~ "AMAPPS Southeast Aerial Cruise Summer 2011",
+      dataset_id == 1277 ~ "AMAPPS Southeast Aerial Cruise Winter 2011",
+      dataset_id == 1281 ~ "Blue Whale Study aerial surveys, southern Australia, 2007-2012",
+      dataset_id == 1288 ~ "AMAPPS Southeast Aerial Cruise Fall 2012",
+      dataset_id == 1289 ~ "AMAPPS Southeast Aerial Cruise Winter 2013",
+      dataset_id == 1302 ~ "Gulf of Maine humpback whale satellite tagging project: 2015",
+      dataset_id == 1322 ~ "Gulf of Maine humpback whale satellite tagging project: 2013",
+      dataset_id == 1340 ~ "Marine Mammal and Sea Turtle Sightings in the Vicinity of the Maryland Wind Energy Area 2013-2015",
+      dataset_id == 1350 ~ "UNCW Hatteras Aerial Survey - Left side - 2015",
+      dataset_id == 1354 ~ "UNCW Norfolk Canyon Aerial Survey - Left side - 2015",
+      dataset_id == 1356 ~ "UNCW Norfolk Canyon Aerial Survey - Right side - 2015",
+      dataset_id == 1373 ~ "Virginia CZM Wind Energy Area Survey- Left side - January 2014 through March 2016",
+      dataset_id == 1377 ~ "AMAPPS Northeast Shipboard Cruise Spring 2014",
+      dataset_id == 1379 ~ "AMAPPS Northeast Aerial Cruise Spring 2014",
+      dataset_id == 1381 ~ "AMAPPS Northeast Aerial Cruise Winter 2014",
+      dataset_id == 1392 ~ "HRC KB26 SCC Aerial Surveys Feb 2014",
+      dataset_id == 1398 ~ "NWTRC JP04 Aerial Surveys 2014-2015",
+      dataset_id == 1400 ~ "SOCAL XE31 UNDET Vessel Surveys May 2014",
+      dataset_id == 1403 ~ "Observatoire Pelagis boat surveys 2003-2021",
+      dataset_id == 1404 ~ "Observatoire Pelagis aerial surveys 2002-2021",
+      dataset_id == 1405 ~ "Observatoire Pelagis sightings from fishery surveys 2004-2009",
+      dataset_id == 1406 ~ "Observatoire Pelagis - Reseau National Echouage (French stranding network) strandings 1934-2020",
+      dataset_id == 1421 ~ "SOCAL FZN4 Marine Mammal Aerial Monitoring 2013",
+      dataset_id == 1423 ~ "SOCAL KB04, FZN1, FZN2 Marine Mammal Aerial Monitoring 2011-2012",
+      dataset_id == 1426 ~ "Cetacean sightings in the north western Mediterranean Sea by GREC ‚Äì EPHE ‚Äì EcoOc√©an Institut,  1996-1997",
+      dataset_id == 1439 ~ "GREC Transit Gibraltar to Azores (2013) and return (2015)",
+      dataset_id == 1467 ~ "SOCAL Marine Mammal Aerial Monitoring 2010",
+      dataset_id == 1471 ~ "UNCW Hatteras Aerial Survey - Left side - 2016",
+      dataset_id == 1473 ~ "UNCW Hatteras Aerial Survey - Right side - 2016",
+      dataset_id == 1479 ~ "UNCW Norfolk Canyon Aerial Survey - Left side - 2016",
+      dataset_id == 1481 ~ "UNCW Norfolk Canyon Aerial Survey - Right side - 2016",
+      dataset_id == 1494 ~ "Aerial Survey Baseline Monitoring in the Continental Shelf Region of the VACAPES OPAREA: January 2016 - December 2016 (left side)",
+      dataset_id == 1517 ~ "MIRC KB17 Vessel Surveys Mar 2012",
+      dataset_id == 1519 ~ "MIRC NAVFAC MISTCS Vessel Surveys Jan-Apr 2007",
+      dataset_id == 1521 ~ "MIRC NAVFAC Incidental Sightings - Aerial 1965-2014",
+      dataset_id == 1522 ~ "MIRC NAVFAC Incidental Sightings - Shore 1965-2014",
+      dataset_id == 1523 ~ "MIRC NAVFAC Incidental Sightings - Vessel 1965-2014",
+      dataset_id == 1530 ~ "MIRC PIFSC Small Vessel Surveys Feb-Mar 2010",
+      dataset_id == 1536 ~ "MIRC PIFSC Small Vessel Surveys Jun-Aug 2013",
+      dataset_id == 1538 ~ "MIRC Valiant Shield Aerial Survey Aug 2007",
+      dataset_id == 1540 ~ "Red Sea Cetacean Review - Sightings",
+      dataset_id == 1541 ~ "Gray whale localized acoustic detections in Granite Canyon 2014-2015",
+      dataset_id == 1543 ~ "Red Sea Cetacean Review - Strandings",
+      dataset_id == 1554 ~ "HRC CETOS Vessel-Based Monitoring Surveys February 2005",
+      dataset_id == 1558 ~ "HRC CRC Small Vessel-Based Monitoring Surveys March-April 2006",
+      dataset_id == 1560 ~ "HRC CRC Small Vessel-Based Monitoring Surveys November-December 2006",
+      dataset_id == 1566 ~ "HRC CETOS Vessel-Based Monitoring Surveys January 2007",
+      dataset_id == 1570 ~ "HRC USWEX Vessel-Based Monitoring Surveys 2007",
+      dataset_id == 1572 ~ "HRC CRC Small Vessel-Based Monitoring Surveys April-May 2008",
+      dataset_id == 1574 ~ "HRC CRC Small Vessel-Based Monitoring Surveys December 2008",
+      dataset_id == 1576 ~ "HRC CRC Small Vessel-Based Monitoring Surveys June-July 2008",
+      dataset_id == 1588 ~ "HRC CRC Small Vessel-Based Monitoring Surveys December 2009",
+      dataset_id == 1590 ~ "HRC CRC Small Vessel-Based Monitoring Surveys October 2009",
+      dataset_id == 1594 ~ "HRC DDG Vessel-Based Monitoring Surveys February 2009",
+      dataset_id == 1600 ~ "HRC SCC Aerial-Based Monitoring Surveys February 2009",
+      dataset_id == 1602 ~ "HRC CRC Small Vessel-Based Monitoring Surveys April 2010",
+      dataset_id == 1604 ~ "HRC CRC Small Vessel-Based Monitoring Surveys December 2010",
+      dataset_id == 1606 ~ "HRC CRC Small Vessel-Based Monitoring Surveys July-August 2010",
+      dataset_id == 1610 ~ "HRC SCC Vessel-Based Monitoring Surveys February 2010",
+      dataset_id == 1616 ~ "HRC SCC Aerial-Based Monitoring Survey February 2010",
+      dataset_id == 1622 ~ "HRC CRC  Small Vessel-Based Monitoring Surveys October-November 2011",
+      dataset_id == 1630 ~ "HRC Vessel-Based Monitoring Surveys February 2011",
+      dataset_id == 1632 ~ "HRC SCC USWEX Vessel-Based Monitoring Surveys February 2011",
+      dataset_id == 1640 ~ "HRC DDG Vessel-Based Monitoring Surveys February 2012",
+      dataset_id == 1662 ~ "UNCW JAX Aerial Survey -Left side- 2017",
+      dataset_id == 1664 ~ "UNCW JAX Aerial Survey -Right side- 2017",
+      dataset_id == 1668 ~ "UNCW Hatteras Aerial Survey -Left side- 2017",
+      dataset_id == 1670 ~ "UNCW Hatteras Aerial Survey -Right side- 2017",
+      dataset_id == 1672 ~ "UNCW Norfolk Canyon Aerial Survey -Left side- 2017",
+      dataset_id == 1674 ~ "UNCW Norfolk Canyon Aerial Survey -Right side- 2017",
+      dataset_id == 1676 ~ "AMAPPS Northeast Aerial Cruise Summer 2016",
+      dataset_id == 1678 ~ "AMAPPS Northeast Shipboard Cruise Summer 2016",
+      dataset_id == 1726 ~ "Happywhale - Sperm Whale in North Atlantic Ocean",
+      dataset_id == 1727 ~ "Happywhale - Sperm Whale in North Pacific Ocean",
+      dataset_id == 1728 ~ "Happywhale - Sperm Whale in South Atlantic Ocean",
+      dataset_id == 1729 ~ "Happywhale - Sperm Whale in Southern Ocean",
+      dataset_id == 1730 ~ "Happywhale - Sperm Whale in South Pacific Ocean",
+      dataset_id == 1738 ~ "Happywhale - Gray Whale in Arctic Ocean",
+      dataset_id == 1739 ~ "Happywhale - Gray Whale in North Pacific Ocean",
+      dataset_id == 1740 ~ "Happywhale - Minke Whale in Arctic Ocean",
+      dataset_id == 1741 ~ "Happywhale - Minke Whale in North Atlantic Ocean",
+      dataset_id == 1742 ~ "Happywhale - Minke Whale in North Pacific Ocean",
+      dataset_id == 1743 ~ "Happywhale - Minke Whale in Southern Ocean",
+      dataset_id == 1744 ~ "Happywhale - Minke Whale in South Pacific Ocean",
+      dataset_id == 1745 ~ "Happywhale - Sei Whale in North Atlantic Ocean",
+      dataset_id == 1746 ~ "Happywhale - Sei Whale in North Pacific Ocean",
+      dataset_id == 1747 ~ "Happywhale - Sei Whale in South Atlantic Ocean",
+      dataset_id == 1748 ~ "Happywhale - Sei Whale in South Pacific Ocean",
+      dataset_id == 1749 ~ "Happywhale - Fin Whale in Arctic Ocean",
+      dataset_id == 1750 ~ "Happywhale - Fin Whale in North Atlantic Ocean",
+      dataset_id == 1751 ~ "Happywhale - Fin Whale in North Pacific Ocean",
+      dataset_id == 1752 ~ "Happywhale - Fin Whale in South Atlantic Ocean",
+      dataset_id == 1753 ~ "Happywhale - Fin Whale in Southern Ocean",
+      dataset_id == 1754 ~ "Happywhale - Fin Whale in South Pacific Ocean",
+      dataset_id == 1755 ~ "Happywhale - Blue Whale in Arctic Ocean",
+      dataset_id == 1756 ~ "Happywhale - Blue Whale in Indian Ocean",
+      dataset_id == 1757 ~ "Happywhale - Blue Whale in North Atlantic Ocean",
+      dataset_id == 1758 ~ "Happywhale - Blue Whale in North Pacific Ocean",
+      dataset_id == 1759 ~ "Happywhale - Blue Whale in South Atlantic Ocean",
+      dataset_id == 1760 ~ "Happywhale - Blue Whale in Southern Ocean",
+      dataset_id == 1761 ~ "Happywhale - Blue Whale in South Pacific Ocean",
+      dataset_id == 1762 ~ "Happywhale - Humpback Whale in Arctic Ocean",
+      dataset_id == 1763 ~ "Happywhale - Humpback Whale in Indian Ocean",
+      dataset_id == 1764 ~ "Happywhale - Humpback Whale in North Atlantic Ocean",
+      dataset_id == 1765 ~ "Happywhale - Humpback Whale in North Pacific Ocean",
+      dataset_id == 1766 ~ "Happywhale - Humpback Whale in South Atlantic Ocean",
+      dataset_id == 1767 ~ "Happywhale - Humpback Whale in Southern Ocean",
+      dataset_id == 1768 ~ "Happywhale - Humpback Whale in South Pacific Ocean",
+      dataset_id == 1769 ~ "Happywhale - Bowhead in Arctic Ocean",
+      dataset_id == 1770 ~ "Happywhale - Bowhead in North Atlantic Ocean",
+      dataset_id == 1783 ~ "Happywhale - Southern Right Whale in South Atlantic Ocean",
+      dataset_id == 1784 ~ "Happywhale - Southern Right Whale in Southern Ocean",
+      dataset_id == 1787 ~ "Happywhale - Bryde's whale in North Pacific Ocean",
+      dataset_id == 1788 ~ "Happywhale - Bryde's whale in South Atlantic Ocean",
+      dataset_id == 1789 ~ "Happywhale - Bryde's whale in South Pacific Ocean",
+      dataset_id == 1790 ~ "Happywhale - Pygmy blue whale in Indian Ocean",
+      dataset_id == 1806 ~ "Happywhale - North Pacific Right Whale in Arctic Ocean",
+      dataset_id == 1807 ~ "Happywhale - North Pacific Right Whale in North Pacific Ocean",
+      dataset_id == 1817 ~ "Digital Aerial Baseline Survey of Marine Wildlife in Support of Offshore Wind Energy - OPA 2016",
+      dataset_id == 1850 ~ "AMAPPS Southeast Aerial Cruise Spring 2014",
+      dataset_id == 1852 ~ "AMAPPS Southeast Aerial Cruise Winter 2015",
+      dataset_id == 1854 ~ "AMAPPS Southeast Aerial Cruise Fall 2016",
+      dataset_id == 1856 ~ "AMAPPS Southeast Aerial Cruise Summer 2016",
+      dataset_id == 1858 ~ "AMAPPS Southeast Aerial Cruise Fall 2017",
+      dataset_id == 1860 ~ "AMAPPS Southeast Aerial Cruise Spring 2017",
+      dataset_id == 1862 ~ "Gray whale visual sightings from shore 2014-2015",
+      dataset_id == 1864 ~ "Gray whale Infrared blow detections from shore 2015",
+      dataset_id == 1889 ~ "NEFSC Aerial Circle-Back Abundance Survey 2006",
+      dataset_id == 1891 ~ "NEFSC North Atlantic Marine Mammal and Turtle Aerial Abundance Survey 2007",
+      dataset_id == 1893 ~ "NEFSC Twin Otter Aerial Survey 2008",
+      dataset_id == 1895 ~ "NEFSC Abundance of the Gulf of Maine and Bay of Fundy Harbor Porpoise Based on Aerial Surveys 1999",
+      dataset_id == 1919 ~ "Gulf of Maine humpback whale satellite tagging project: 2018",
+      dataset_id == 1928 ~ "Happywhale - Bowhead in North Pacific Ocean",
+      dataset_id == 1929 ~ "Happywhale - Sei Whale in Arctic Ocean",
+      dataset_id == 1933 ~ "Happywhale - Southern Right Whale in Indian Ocean",
+      dataset_id == 1944 ~ "Happywhale - Sperm Whale in Arctic Ocean",
+      dataset_id == 1945 ~ "Happywhale - Sperm Whale in Indian Ocean",
+      dataset_id == 1951 ~ "CRC HRC PMRF Small Vessel-Based Monitoring Surveys February 2016",
+      dataset_id == 1954 ~ "CRC HRC Vessel-Based Surveys KB11 2013-2014",
+      dataset_id == 1958 ~ "CRC HRC PMRF Small Vessel-Based Monitoring Surveys February 2014",
+      dataset_id == 1960 ~ "CRC HRC PMRF Aerial Ship-follow Surveys February 2015 and 2016",
+      dataset_id == 1961 ~ "CRC HRC PMRF Small Vessel-Based Monitoring Surveys February 2015",
+      dataset_id == 1966 ~ "NWTRC Aerial Surveys in Puget Sound in 2016",
+      dataset_id == 1968 ~ "NWTRC Small Vessel-based Surveys in 2016 and 2018",
+      dataset_id == 1974 ~ "AMAPPS Southeast Shipboard Cruise Summer 2016",
+      dataset_id == 1980 ~ "SEFSC GoMMAPPS Vessel Survey 2017 Summer",
+      dataset_id == 1982 ~ "SEFSC GoMMAPPS Vessel Survey 2018 Winter",
+      dataset_id == 1984 ~ "SEFSC GoMMAPPS Vessel Survey 2018 Summer",
+      dataset_id == 1987 ~ "Happywhale - Sei Whale in Southern Ocean",
+      dataset_id == 1990 ~ "SEUS Right Whale EWS Aerial Surveys 2016-17",
+      dataset_id == 1992 ~ "SEUS Right Whale EWS Aerial Surveys 2017-18",
+      dataset_id == 1994 ~ "Digital Aerial Baseline Survey of Marine Wildlife in Support of Offshore Wind Energy - OPA 2017",
+      dataset_id == 1995 ~ "AMAPPS Northeast Aerial Cruise Winter 2017",
+      dataset_id == 1997 ~ "AMAPPS Northeast Aerial Cruise Spring 2017",
+      dataset_id == 1999 ~ "Sightings from R/V Song of the Whale during the winter 2019 MAPS survey (NMFS permit 14809)",
+      dataset_id == 2001 ~ "Sightings from R/V Song of the Whale during the spring 2019 MAPS survey (NMFS permit 14809)",
+      dataset_id == 2003 ~ "VACAPES Vessel Nearshore Humpback Whale Monitoring 2015-2019",
+      dataset_id == 2004 ~ "SEUS Right Whale EWS Aerial Surveys 2018-19",
+      dataset_id == 2018 ~ "Cetacean sightings in Ghana and Ivorycoast",
+      dataset_id == 2019 ~ "Cetacean and sea turtle sightings in Gabon",
+      dataset_id == 2036 ~ "AMAPPS Southeast Aerial Cruise Spring 2019",
+      dataset_id == 2038 ~ "OceanCare cetacean sightings in Sicily, Italy 2016-2019",
+      dataset_id == 2041 ~ "Happywhale - Minke Whale in South Atlantic Ocean",
+      dataset_id == 2053 ~ "AMAPPS Southeast Aerial Cruise Winter 2019-2020",
+      dataset_id == 2055 ~ "Acoustic detections from R/V Song of the Whale during the winter 2019 MAPS survey (NMFS permit 14809)",
+      dataset_id == 2056 ~ "Acoustic detections from R/V Song of the Whale during the spring 2019 MAPS survey (NMFS permit 14809)",
+      dataset_id == 2059 ~ "VACAPES NFC Aerial Surveys 2018-2019",
+      dataset_id == 2060 ~ "AMAPPS Northeast Aerial Cruise Spring 2019",
+      dataset_id == 2062 ~ "AMAPPS Northeast Aerial Cruise Fall 2019",
+      dataset_id == 2065 ~ "Ecological Baseline Studies of the U.S. Outer Continental Shelf Option Year 1",
+      dataset_id == 2066 ~ "VACAPES Offshore Study Area Observations 2015-2018",
+      dataset_id == 2067 ~ "Empire Wind Digital Aerial Wildlife Surveys for BOEM Lease Area OCS-A 0512, Equinor Wind US LLC, November 2017-October 2018",
+      dataset_id == 2071 ~ "PIFSC Mariana Archipelago cetacean surveys 2010-2019",
+      dataset_id == 2073 ~ "Digital Aerial Baseline Survey of Marine Wildlife in Support of Offshore Wind Energy - OPA 2018",
+      dataset_id == 2084 ~ "Happywhale - Bryde's whale in North Atlantic Ocean",
+      dataset_id == 2090 ~ "Happywhale - Southern Right Whale in South Pacific Ocean",
+      dataset_id == 2122 ~ "Fin whale localized acoustic detections off Kauai 2011-2017",
+      dataset_id == 2124 ~ "Dedicated boat-based surveys for marine megafauna in Suriname",
+      dataset_id == 2125 ~ "Marine Fauna Observer data collected on board seismic survey vessels operating around Suriname as part of an EU-funded Marine Spatial Planning project",
+      dataset_id == 2126 ~ "Opportunistic records of marine megafauna in Suriname",
+      dataset_id == 2128 ~ "KYMA boat-based surveys in Thyrrhenian Sea and Ionian Sea",
+      dataset_id == 2130 ~ "SWFSC Marine Mammal Survey, CalCurCEAS 2014, Cruise 1647",
+      dataset_id == 2135 ~ "Happywhale - North Atlantic Right Whale in North Atlantic Ocean",
+      dataset_id == 2145 ~ "SWFSC Marine Mammal Survey, CLAWS 2015, Cruise 1648",
+      dataset_id == 2147 ~ "SWFSC Marine Mammal Survey, CCES 2018, Cruise 1651",
+      dataset_id == 2155 ~ "Acoustic detections in Northeast and South Atlantic",
+      dataset_id == 2156 ~ "Acoustic detections in Indian Ocean",
+      dataset_id == 2159 ~ "Empire Wind Digital Aerial Wildlife Surveys for BOEM Lease Area OCS-A 0512, Equinor Wind US LLC, February - December 2019",
+      dataset_id == 2161 ~ "Ecological Baseline Studies of the U.S. Outer Continental Shelf Option Year 2",
+      dataset_id == 2164 ~ "CRESLI marine mammal observations from whale watch cruises 2020",
+      dataset_id == 2165 ~ "CRESLI marine mammal observations from whale watch cruises 2021",
+      dataset_id == 2180 ~ "PIFSC, Marine Mammal Survey, HICEAS 2017, Cruise 1705/1706, NOAA Pacific Islands Fisheries Science Center (PIFSC)",
+      dataset_id == 2185 ~ "Cap'n Fish's Cruises sightings",
+      dataset_id == 2187 ~ "Beacon Wind Digital Aerial Wildlife Surveys for BOEM Lease Area OCS-A 0520, Equinor Wind US LLC, March 2021 ‚Äì October 2021",
+      dataset_id == 2189 ~ "Happywhale - Bryde's whale in Indian Ocean",
+      dataset_id == 2190 ~ "Minke whale localized acoustic detections off Kauai",
+      dataset_id == 2192 ~ "Beacon Wind Digital Aerial Wildlife Surveys for BOEM Lease Area OCS-A 0520, Equinor Wind US LLC, December 2019 ‚Äì November 2020",
+      dataset_id == 103150014 ~ "Seabirds of the Southern and South Indian Ocean",
+      dataset_id == 103150022 ~ "Whale catches in the Southern Ocean",
+      dataset_id == 103150130 ~ "iziko South African Museum - Marine Mammal Collection",
+      dataset_id == 103150146 ~ "Antarctic Pack Ice Seals 1994-1999, plus historical data from the 1980's",
+      dataset_id == 103150150 ~ "Cetacean Sightings Survey and Southern Ocean cetacean program",
+      dataset_id == 103150267 ~ "Aerial survey of upper trophic level predators on PLatts Bank, Gulf of Maine",
+      dataset_id == 103150518 ~ "Southern right whales distribution in Bah√≠a Nueva, Puerto Madryn, Argentina",
+      dataset_id == 103150567 ~ "National Whale and Dolphin Sightings and Strandings Database",
+      dataset_id == 103150599 ~ "Whale Observations from the British, Australian and New Zealand Antarctic Reaserch Expedition (BANZARE) voyages 1929-30 and 1930-31",
+      dataset_id == 103150607 ~ "Whale log - observations from ANARE voyages",
+      dataset_id == 103151502 ~ "Marine and Coastal Research Institute - INVEMAR, Colombia,IABIN",
+      dataset_id == 103151576 ~ "ICES contaminants and biological effects",
+      dataset_id == 103151600 ~ "ANTXXIII-8 Birds and Mammals",
+      dataset_id == 103151625 ~ "MAR-ECO 2004 - Mammals and birds",
+      dataset_id == 103152336 ~ "Victorian Biodiversity Atlas, Victoria, Australia (1900-2017) - marine records",
+      dataset_id == 103152339 ~ "Asia-Pacific Dataset",
+      dataset_id == 103152349 ~ "Historic whale catch data from New Zealand whaling stations (1948-1964)",
+      dataset_id == 103152356 ~ "South Australian Museum Mammology Collection - marine records",
+      dataset_id == 103152363 ~ "British Antarctic (Terra Nova) Expedition, 1910-1913",
+      dataset_id == 103152370 ~ "UFPE Oceanography Zooplankton Research",
+      dataset_id == 103152371 ~ "POPA- Fisheries Observer Program of the Azores: Marine mammal sightings in the Azores tuna fishery from 1998 on: during navigation or search mode",
+      dataset_id == 103152373 ~ "Marine species citizen-science observations from NatureWatch NZ",
+      dataset_id == 103152387 ~ "Humpback whale sightings around New Zealand 1970-1999",
+      dataset_id == 103152391 ~ "Southern right whales wintering in the Auckland Islands, 1995-1998",
+      dataset_id == 103152397 ~ "DFO Maritimes Region Cetacean Sightings",
+      dataset_id == 103152399 ~ "Biological observations from the Discovery Investigations 1925-1952",
+      dataset_id == 103152411 ~ "CETUS: Cetacean monitoring surveys in the Eastern North Atlantic",
+      dataset_id == 103152416 ~ "Historic whale catch data from Australian whaling stations (1925-1978)",
+      dataset_id == 103152419 ~ "Marine fauna sightings within Australian marine parks during surveys by the company BMT, Western Australia (2019)",
+      dataset_id == 103152425 ~ "Sightings of marine mammals carried out during oceanographic surveys in the Argentine continental shelf",
+      dataset_id == 103152427 ~ "Diveboard - Scuba diving citizen science observations",
+      dataset_id == 103152433 ~ "RV Investigator Voyage IN2017_V01 Whale Observations, Sabrina coast, Antarctica (2017)",
+      dataset_id == 103152441 ~ "RV Investigator Voyage IN2016_V06 Seabird Observations, Australia (2016)",
+      dataset_id == 103152442 ~ "NESP MBH D1 - Oceanic Shoals opportunistic visual surveys of marine megafauna",
+      dataset_id == 103152459 ~ "Cetaceo_Ecuador_Project_SIBIMAP",
+      dataset_id == 103152461 ~ "Marine Bird Sighting Data, Arctic Marine Biodiversity Observing Network (AMBON) Chukchi Sea research cruise on the vessel Norseman II from 2015-08-09 to 2015-09-03",
+      dataset_id == 103152475 ~ "POPA- Fisheries Observer Program of the Azores: Marine mammal sightings in the Azores tuna fishery from 1998 to 2013: during the capture of live bait",
+      dataset_id == 103152476 ~ "Marine Bird Sighting Data, Arctic Marine Biodiversity Observing Network (AMBON) Chukchi Sea research cruise on the vessel Norseman II from 2017-08-05 to 2017-08-25",
+      dataset_id == 103152479 ~ "Fauna Atlas N.T. - marine records, Northern Territory, Australia",
+      dataset_id == 103152480 ~ "POPA- Fisheries Observer Program of the Azores: Marine mammal sightings in the Azores between 2004 and 2013 recorded by Biosphere Expedition",
+      dataset_id == 103152493 ~ "Habitat associations of cetaceans and seabirds in the tropical eastern Indian Ocean, Browse Basin, Australia (2008)",
+      dataset_id == 103152507 ~ "Marine Mammals distribution data from the Eastern Arabian Sea",
+      dataset_id == 103152508 ~ "National Inventory of the Natural Heritage: Data from the air monitoring campaigns of marine megafauna (SAMM) in the French metropolitan area",
+      dataset_id == 103152518 ~ "Vessel line-transect surveys of Arctic marine mammals in the Chuckchi Sea, Arctic Marine Biodiversity Observing Network (AMBON) research cruise on the vessel Norseman II from 2017-08-05 to - 2017-08-25",
+      dataset_id == 103152536 ~ "Marine biological observation data from coastal and offshore surveys around New Zealand",
+      dataset_id == 103152542 ~ "Marine mammal observations from the TAN1802 voyage to the Ross Sea, Antarctica",
+      dataset_id == 103152547 ~ "European Seabirds at Sea - data collected by the Research Institute for Nature and Forest (INBO), Belgium",
+      dataset_id == 103152564 ~ "Occurrence data from 11th Southern Ocean Expedition-India",
+      dataset_id == 103152569 ~ "Norman and Florence Hammond records. Seawatch and coastal survey records",
+      dataset_id == 103152572 ~ "Incidental sightings of marine mammals",
+      dataset_id == 103152578 ~ "RV Investigator Voyage IN2017_T01 Seabird Observations, Australia (2017)",
+      dataset_id == 103152579 ~ "Antractic whale observation on a platform of opportunity abroad krill fishing vessel Dalmor II",
+      dataset_id == 103152589 ~ "The Belgian Marine Mammals Database (BMM)",
+      dataset_id == 103152592 ~ "Vessel line-transect surveys of Arctic cetaceans in the Chuckchi Sea, Arctic Marine Biodiversity Observing Network (AMBON) research cruise on the vessel Norseman II, 2015-08-09 - 2015-09-03",
+      dataset_id == 103152596 ~ "RV Investigator Voyage IN2017_V02 Seabird Observations, Australia (2017)",
+      dataset_id == 103152597 ~ "Marine Mammals distribution data from Northern Indian Ocean",
+      dataset_id == 103152598 ~ "POPA- Fisheries Observer Program of the Azores: Marine mammal sightings in the Azores tuna fishery from 1998 to 2013: while fishing",
+      dataset_id == 103152603 ~ "Sightings of southern right whales around mainland New Zealand 1976-2002",
+      dataset_id == 200000003 ~ "SOCAL Deployment 31 at Site M - Bb(Clicks), Gg(Clicks,Whistles), Lo(Clicks), Oo(Clicks), Pm(Clicks)",
+      dataset_id == 200000004 ~ "SOCAL Deployment 31 at Site M - Er(M3)",
+      dataset_id == 200000010 ~ "SOCAL Deployment 32 at Site M - Gg(Clicks,Whistles), Lo(Clicks), Oo(Clicks), Pm(Clicks)",
+      dataset_id == 200000011 ~ "SOCAL Deployment 32 at Site M - Mn(Non-Song,Song)",
+      dataset_id == 200000017 ~ "SOCAL Deployment 32 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000018 ~ "SOCAL Deployment 32 at Site N - Mn(Song)",
+      dataset_id == 200000024 ~ "SOCAL Deployment 33 at Site M - Mn(Song)",
+      dataset_id == 200000033 ~ "SOCAL Deployment 33 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000039 ~ "SOCAL Deployment 34 at Site M - Bb(Clicks), Gg(Clicks), Lo(Clicks), Pm(Clicks)",
+      dataset_id == 200000040 ~ "SOCAL Deployment 34 at Site M - Mn(Song,Non-Song)",
+      dataset_id == 200000041 ~ "SOCAL Deployment 34 at Site M - Bb(Be4)",
+      dataset_id == 200000046 ~ "SOCAL Deployment 34 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000047 ~ "SOCAL Deployment 34 at Site N - Bb(Be4)",
+      dataset_id == 200000048 ~ "SOCAL Deployment 34 at Site N - Bb(Be4)",
+      dataset_id == 200000054 ~ "SOCAL Deployment 35 at Site M - Mn(Non-Song,Song)",
+      dataset_id == 200000055 ~ "SOCAL Deployment 35 at Site M - Bb(Be4)",
+      dataset_id == 200000059 ~ "SOCAL Deployment 35 at Site N - Lo(Clicks), Oo(Clicks,HFM), Pm(Clicks)",
+      dataset_id == 200000060 ~ "SOCAL Deployment 35 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000061 ~ "SOCAL Deployment 35 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000062 ~ "SOCAL Deployment 35 at Site N - Bb(Be4)",
+      dataset_id == 200000070 ~ "SOCAL Deployment 36 at Site M - Mn(Non-Song,Song)",
+      dataset_id == 200000071 ~ "SOCAL Deployment 36 at Site M - Bb(Be4)",
+      dataset_id == 200000076 ~ "SOCAL Deployment 36 at Site N - Mn(Non-Song,Song)",
+      dataset_id == 200000077 ~ "SOCAL Deployment 36 at Site N - Bb(Be4)",
+      dataset_id == 200000083 ~ "SOCAL Deployment 37 at Site M - Mn(Song,Non-Song)",
+      dataset_id == 200000089 ~ "SOCAL Deployment 37 at Site N - Mn(Song,Non-Song)",
+      dataset_id == 200000095 ~ "SOCAL Deployment 38 at Site M - Mn(Non-Song)",
+      dataset_id == 200000100 ~ "SOCAL Deployment 38 at Site N - Mn(Non-Song)",
+      dataset_id == 200000102 ~ "SOCAL Deployment 38 at Site N - Ba(Boing)",
+      dataset_id == 200000103 ~ "SOCAL Deployment 38 at Site N - Ba(Boing)",
+      dataset_id == 200000108 ~ "SOCAL Deployment 40 at Site M - Mn(Non-Song)",
+      dataset_id == 200000109 ~ "SOCAL Deployment 40 at Site M - Bb(Be4)",
+      dataset_id == 200000110 ~ "SOCAL Deployment 40 at Site M - Ba(Boing)",
+      dataset_id == 200000113 ~ "SOCAL Deployment 40 at Site N - Mn(Non-Song)",
+      dataset_id == 200000114 ~ "SOCAL Deployment 40 at Site N - Bb(Be4)",
+      dataset_id == 200000115 ~ "SOCAL Deployment 40 at Site N - Ba(Boing)",
+      dataset_id == 200000119 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000121 ~ "SOCAL Deployment 41 at Site M - Bb(Be4)",
+      dataset_id == 200000122 ~ "SOCAL Deployment 41 at Site M - Bb(Be4), Er(M3)",
+      dataset_id == 200000123 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000124 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000128 ~ "SOCAL Deployment 41 at Site M - Mn(Non-Song)",
+      dataset_id == 200000129 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000130 ~ "SOCAL Deployment 41 at Site M - Bb(Be4), Er(M3)",
+      dataset_id == 200000131 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000132 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000134 ~ "SOCAL Deployment 41 at Site M - Er(M3)",
+      dataset_id == 200000138 ~ "SOCAL Deployment 41 at Site N - Bb(Be4)",
+      dataset_id == 200000139 ~ "SOCAL Deployment 41 at Site N - Mn(Non-Song)",
+      dataset_id == 200000140 ~ "SOCAL Deployment 41 at Site N - Bb(Be4)",
+      dataset_id == 200000144 ~ "SOCAL Deployment 44 at Site H - Bb(Be2,Be4)",
+      dataset_id == 200000149 ~ "SOCAL Deployment 44 at Site M - Bb(Be4)",
+      dataset_id == 200000157 ~ "SOCAL Deployment 45 at Site H - Bb(Be4)",
+      dataset_id == 200000158 ~ "SOCAL Deployment 45 at Site H - Bb(Be4), Er(M3)",
+      dataset_id == 200000159 ~ "SOCAL Deployment 45 at Site H - Bb(Be4)")) %>% 
+  dplyr::rename(eventDate = obs_date,
+                decimalLatitude = latitude,
+                decimalLongitude = longitude,
+                individualCount = count,
+                basisOfRecord = platform) %>% 
+  mutate(coordinateUncertaintyInMeters = NA, #add fields that GBIF & OBIS had so we can combine these datasets at a later step
+         coordinatePrecision = NA,
+         issue = NA,
+         occurrenceStatus = NA,
+         eventID = NA,
+         samplingProtocol = NA,
+         sampleSizeValue = NA,
+         sampleSizeUnit = NA,
+         samplingEffort = NA,
+         startDayOfYear = NA,
+         endDayOfYear = NA,
+         year = NA,
+         month = NA,
+         day = NA,
+         footprintWKT = NA,
+         footprintSRS = NA,
+         rightsHolder = NA,
+         accessRights = NA,
+         rights = NA,
+         license = NA,
+         parentEventID = NA,
+         fieldNumber = NA,
+         fieldNotes = NA,
+         eventRemarks = NA,
+         occurrenceID = NA,
+         organismQuantity = NA, 
+         organismQuantityType = NA,
+         subspecies = NA,
+         eventDate = as.character(eventDate),
+         source = "OBIS-SEAMAP") %>% 
+  dplyr::select(datasetName, dataset_id, species, subspecies, species_common_nm, utc,
+                decimalLatitude, decimalLongitude, individualCount, basisOfRecord,
+                coordinateUncertaintyInMeters, coordinatePrecision, issue, occurrenceStatus,
+                eventDate, eventTime, eventID, samplingProtocol, sampleSizeValue, sampleSizeUnit,
+                samplingEffort, startDayOfYear, endDayOfYear, year, month, day, footprintWKT,
+                footprintSRS, rightsHolder, accessRights, rights, license, parentEventID,
+                fieldNumber, fieldNotes, eventRemarks, occurrenceID, organismQuantity,
+                organismQuantityType, date_downloaded, source)
+```
+
+```{r California Department of Fish and Wildlife Data}
+#Read in raw USGS data 
+cdfw_path <- here("CDFW Shapefile")
+cdfw_shape <- list.files(cdfw_path, full.names = TRUE) 
+
+# cleanup fields:
+cdfw <- sf::read_sf(cdfw_shape[8]) %>% 
+  as.data.frame(cdfw_raw_sf) %>% 
+  clean_names() %>%
+  rename(eventDate = date,
+         decimalLatitude = lat,
+         decimalLongitude = lon,
+         individualCount = group_size) %>% 
+  mutate(eventDate = mdy(eventDate),
+         species_common_nm = case_when(
+           scientific %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+           scientific %in% "Balaenoptera musculus" ~ "Blue Whale",
+           scientific %in% "Balaena mysticetus" ~ "Bowhead Whale",
+           scientific %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+           scientific %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+           scientific %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+           scientific %in% "Balaenoptera physalus" ~ "Fin Whale",
+           scientific %in% "Eschrichtius robustus" ~ "Gray Whale",
+           scientific %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+           scientific %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+           scientific %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+           scientific %in% "Balaenoptera borealis" ~ "Sei Whale",
+           scientific %in% "Eubalaena australis" ~ "Southern Right Whale",
+           scientific %in% "Physeter macrocephalus" ~ "Sperm Whale",
+           scientific %in% "Physeter catadon" ~ "Sperm Whale"),
+         species = if_else(species_common_nm == "Sperm Whale", "Physeter macrocephalus", scientific),
+         datasetName = "Marine birds and mammals at sea. Washington, Oregon, California 1975-2008",
+         dataset_id = "Marine birds and mammals at sea. Washington, Oregon, California 1975-2008",
+         date_downloaded = "2022-02-15",
+         coordinateUncertaintyInMeters = NA,
+         basisOfRecord = NA,
+         coordinatePrecision = NA,
+         issue = NA,
+         occurrenceStatus = NA,
+         eventID = NA,
+         samplingProtocol = NA,
+         sampleSizeValue = NA,
+         sampleSizeUnit = NA,
+         samplingEffort = NA,
+         startDayOfYear = NA,
+         endDayOfYear = NA,
+         year = NA,
+         month = NA,
+         day = NA,
+         footprintWKT = NA,
+         footprintSRS = NA,
+         rightsHolder = NA,
+         accessRights = NA,
+         rights = NA,
+         license = NA,
+         parentEventID = NA,
+         fieldNumber = NA,
+         fieldNotes = NA,
+         eventRemarks = NA,
+         occurrenceID = NA,
+         organismQuantity = NA, 
+         organismQuantityType = NA,
+         utc = FALSE,
+         eventTime = NA,
+         eventID = NA,
+         subspecies = NA,
+         eventDate = as.character(eventDate),
+         source = "Computer Database Analysis System (CDAS) for CDFW") %>% 
+  dplyr::select(datasetName, dataset_id, species, subspecies, species_common_nm, utc, 
+                decimalLatitude, decimalLongitude, individualCount, basisOfRecord, 
+                coordinateUncertaintyInMeters, coordinatePrecision, issue, occurrenceStatus, 
+                eventDate, eventTime, eventID, samplingProtocol, sampleSizeValue, sampleSizeUnit,
+                samplingEffort, startDayOfYear, endDayOfYear, year, month, day, footprintWKT, 
+                footprintSRS, rightsHolder, accessRights, rights, license, parentEventID, 
+                fieldNumber, fieldNotes, eventRemarks, occurrenceID, organismQuantity, 
+                organismQuantityType, date_downloaded, source)
+```
+
+```{r Combine & standardize date}
+#Combine all non-tracking data into one data frame
+combined_data <- rbind(obis_nontracking, gbif_nontracking, obis_seamap_nontracking, cdfw) %>% 
+  clean_names()
+
+#remove recrods with blank event date, latitude or longitude
+combined_data <- combined_data %>% 
+  filter(event_date != "") %>% 
+  filter(decimal_latitude != "",
+         decimal_longitude != "")
+
+date_standardization  <- combined_data %>% 
+  mutate(event_date = as.character(event_date),
+         nchar_edate = nchar(event_date)) %>% 
+  arrange(nchar_edate) 
+
+head(date_standardization )
+range(date_standardization $nchar_edate)
+tail(date_standardization )
+summary(as.factor(date_standardization $nchar_edate)) # 4, 7,8 9, 10, 16, 17, 18, 19, 20, 21, 22, 25, 33, 39
+
+# Set up empty data fields: 
+date_standardization  <- date_standardization  %>% 
+  mutate(event_date_1 = NA,
+         event_date_2 = NA)
+summary(as.factor(nchar(date_standardization $event_date))) # Some with missing dateS? 
+
+# Extract event_date_1 - anything before dash if contains dash, and event_date_2 - anything after dash if contains dash 
+date_standardization  <- date_standardization  %>% 
+  mutate(event_date_1 = ifelse(grepl('/', event_date), 
+                                word(event_date, 1, sep = '\\/'), 
+                                event_date),
+         event_date_2 = ifelse(grepl('/', event_date), 
+                                word(event_date, -1, sep = '\\/'), 
+                                NA))
+
+######## Date formatting: 
+# event_date is the original date from each record. Unfortunately there are a mix of formats - some are some form of Y-M-D (and maybe time), which lubridate can deal with easily. Others are just year, or intervals (Y/Y or Y-M-D/Y-M-D). 
+# I want to be able to get (1) the year for each record, (2) the date for each record for which it is available, and (3) retain intervals. 
+# To do this, I extracted the number of characters for each event_date 
+
+date_formatting_function <- function(event_date, i){ # event_date is the event_date_1 or event_date_2, date_standardization  is the name of the data, i is whether it's 1 or 2 (to rename vectors at the end)
+  y_only = y_m_only = year_vector = month_vector = date_vector = rep(NA, length(event_date))
+  nchar_edate = nchar(event_date)
+  # 
+  # # Assign all NA nchar_edates to negative numbers, so that the NA's are retained but the code still runs: 
+  nchar_edate[is.na(nchar_edate)] <- -1
+  
+  # All normally formatted dates (that have year, month, and day) are > 7 characters long: 
+  date_vector[nchar_edate > 7] <- as.character(lubridate::date(event_date[nchar_edate > 7]))
+  y_only[nchar_edate > 7] = y_m_only[nchar_edate > 7] = FALSE
+ 
+  # year-only dates (4 characters): 
+  year_vector = ifelse(nchar_edate == 4, 
+                as.numeric(event_date),
+                year_vector)
+  y_only = ifelse(nchar_edate == 4, TRUE, y_only)
+  y_m_only = ifelse(nchar_edate == 4, FALSE, y_m_only)
+  
+  # Year - month (no date) - 7 characters. Take the first 4 characters for year, 6-7 for month
+  year_vector =  ifelse(nchar_edate == 7, 
+                        as.numeric(substr(event_date, 1, 4)),
+                        year_vector)
+  month_vector= ifelse(nchar_edate == 7, 
+                       as.numeric(substr(event_date, 6, 7)),
+                       month_vector)
+  y_only = ifelse(nchar_edate == 7, FALSE, y_only)
+  y_m_only = ifelse(nchar_edate == 7, TRUE, y_m_only)
+  out <- data.frame(date_vector, year_vector, month_vector, y_only, y_m_only)
+  colnames(out) = paste(c('date', 'year', 'month', 'y_only','y_m_only'), i, sep = "_")
+  return(out)
+}
+
+temp_date_columns_1 <- date_formatting_function(event_date = date_standardization $event_date_1, i = 1)
+sum(!is.na(temp_date_columns_1$date_1)) + sum(temp_date_columns_1$y_m_only_1 == T, na.rm =T) + sum(temp_date_columns_1$y_only_1, na.rm = T) + sum(is.na(temp_date_columns_1$y_only_1)) == nrow(temp_date_columns_1) 
+
+#date column 2
+temp_date_columns_2 <- date_formatting_function(event_date = date_standardization $event_date_2, i = 2)
+
+#combine
+date_standardization  <- cbind(date_standardization , temp_date_columns_1, temp_date_columns_2)
+
+## Deal with intervals: 
+# Check whether the dates for intervals are different: 
+date_standardization  <- date_standardization  %>% 
+  dplyr::mutate(date_1_f = lubridate::date(as.character(date_1)),
+         date2_f = lubridate::date(as.character(date_2)),
+         date_diff = interval(date_1_f, date2_f)/days(1))
+head(date_standardization [!is.na(date_standardization $date_1),])
+
+summary(date_standardization $date_diff)
+sum(date_standardization $date_diff == 0, na.rm =T) # 3179 have no difference bt date 1 and date 2
+summary(date_standardization $date_diff[date_standardization $date_diff >0]); sum(date_standardization $date_diff >0, na.rm =T) # 118 interval dates that have length > 0
+
+date_standardization  <- date_standardization  %>% 
+  mutate(interval_length_days = ifelse(date_diff > 0, date_diff, NA))
+summary(date_standardization $interval_length_days)
+
+# TODO: look up datasets for interval lengths > 0 ******** 
+length(unique(date_standardization $dataset_id[date_standardization $date_diff > 0])) # 9 separate datasets.
+
+# investigate for year only intervals: 
+date_standardization  <- date_standardization  %>% 
+  mutate(y_only_diff = year_2 - year_1)
+summary(date_standardization $y_only_diff)  # all of the datasets that were YYYY/YYYY event date formatted had the same year.
+
+##### Formatted dates: ######
+date_standardization $date_formatted
+
+temp <- date_standardization  %>% 
+  dplyr::filter(y_m_only_1 == TRUE) %>% 
+  count(dataset_name)
+
+# For year/month only, set them to the 15th: 
+date_standardization $date_1_f[which(date_standardization $y_m_only_1 == TRUE)] <- lubridate::date(paste(date_standardization $year_1[which(date_standardization $y_m_only_1 == TRUE)], 
+                                                             date_standardization $month_1[which(date_standardization $y_m_only_1 == TRUE)], 15, sep = '-'))
+
+# Format dates:
+date_standardization $date_formatted <- date_standardization $date_1_f
+date_standardization $date_formatted[date_standardization $date_diff > 0] <- NA # assign NA's to those that have an interval that is not just the same date twice
+sum(is.na(date_standardization $date_formatted)) == sum(date_standardization $date_diff > 0, na.rm = T) + sum(date_standardization $y_only_1, na.rm  = T) + sum(date_standardization $event_date == '') # Should be equal .... 
+
+# extract years and seasons: 
+date_standardization  <- date_standardization  %>% 
+  mutate(year_formatted = as.numeric(year(date_formatted)),
+         year_formatted = if_else(y_only_1 == T, 
+                                  year_1, year_formatted),
+         month_formatted = as.numeric(month(date_formatted)), 
+         quarter_of_year = if_else(month_formatted < 4, "Jan-Mar", # bt 1-3
+                                   if_else(month_formatted >=4 & month_formatted < 7, "April-June", # b/t 4-6
+                                           if_else(month_formatted >=7 & month_formatted < 10, "July-Sep", "Oct-Dec")))) # b/t 7-9, b/t 10-12
+summary(date_standardization $year_formatted)
+hist(date_standardization $year_formatted)
+
+# now remove the fields that were created during this process that we don't need
+date_standardization  <- date_standardization  %>% 
+  select(-date_1_f, -date_diff, -date2_f, -event_date_1, -event_date_2, -month_1, -month_2, -month_formatted, -nchar_edate, -y_m_only_2, -y_only_2, -y_only_diff, -year_1, -year_2)  %>% 
+  mutate(fid = row_number())
+```
+
+```{r Remove Duplicates}
+## We identified and removed duplicate datasets with the exact same name (this identified duplicate datasets between GBIF, OBIS, & OBIS-SEAMAP).
+
+# datasets with the same name
+duplicate_datasets <- date_standardization %>% 
+  count(dataset_name, source) %>% 
+  get_dupes(dataset_name) 
+
+#Next, identify datasets that appear in all three data sources (OBIS-SEAMAP, GBIf & OBIS) 
+duplicate_datasets_all <- duplicate_datasets %>% 
+  filter(dupe_count == 3) %>% 
+  distinct(dataset_name)
+
+#Also, identify datasets that appear in OBIS-SEAMAP & GBIF
+duplicate_datasets_obis_seamap <- duplicate_datasets %>% 
+  filter(dupe_count == 2 & source == "OBIS-SEAMAP")
+
+#Also, identify datasets that appear in OBIS & GBIF
+duplicate_datasets_obis <- duplicate_datasets %>% 
+  filter(dupe_count == 2 & source == "OBIS")
+
+#save these datasets as vectors to be filtered out in step below
+duplicate_datasets_vec <- unique(duplicate_datasets_all$dataset_name)
+duplicate_datasets_vec_2 <- unique(duplicate_datasets_obis_seamap$dataset_name)
+duplicate_datasets_vec_3 <- unique(duplicate_datasets_obis$dataset_name)
+
+#use filter & anti_join to filter out duplicate datasets: (a)in the case where there is the same datasets from all three sources, filter to only include datasets from OBIS-SEAMAP, (b) if the same dataset is in GBIF & OBIS-SEAMAP, filter to include dataset from OBIS-SEAMAP, or (c) if the same dataset is in GBIF & OBIS, filter to include from GBIF
+duplicate_datasets_rm <- date_standardization %>%
+  filter((dataset_name %in% duplicate_datasets_vec & source %in% c("GBIF", "OBIS")) | (dataset_name %in% duplicate_datasets_vec_2 & source == "GBIF") | (dataset_name %in% duplicate_datasets_vec_3 & source == "OBIS"))
+
+combined_df <- anti_join(date_standardization, duplicate_datasets_rm, by = "fid") %>% 
+  select(-fid)
+
+#Now we are ready to do duplicate removal using distinct() to capture other duplicate values. This function keeps the first record and removes any subsequent duplicates, so we:
+
+# first, prioritize the df by source in the following order:
+combined_df <- combined_df  %>% 
+  arrange(factor(source, levels = c('Modern Whaling (IWC)', 'OBIS-SEAMAP', 'Computer Database Analysis System (CDAS) for CDFW', 'PacIOOS', 'GBIF', 'OBIS')))
+
+# Next, we created new lat/long fields rounded to two decimal places  & remove duplicates using distinct() to keep only unique/distinct rows from a data frame based on certain columns
+combined_df_clean <- combined_df %>% 
+  mutate(decimal_latitude = as.numeric(decimal_latitude),
+         decimal_longitude = as.numeric(decimal_longitude)) %>% 
+  mutate(latitude_round = round(decimal_latitude, digits = 2),
+         longitude_round = round(decimal_longitude, digits = 2)) %>% 
+  distinct(species, date_formatted, longitude_round, latitude_round, .keep_all = TRUE)
+
+## Clean up column names to match tagging data cleaned in the subsequent code chunks
+combined_df_clean <- combined_df_clean %>% 
+  dplyr::rename(
+    species_common = species_common_nm,
+    latitude = decimal_latitude,
+    longitude = decimal_longitude,
+    coordinate_uncertainty_m = coordinate_uncertainty_in_meters,
+  ) %>% 
+  mutate(
+    visible = NA,
+    argos_lc = NA,
+    sensor_type = NA,
+    tag_local_id = NA,
+    event_id = NA,
+    individual_local_id = NA,
+    utm_easting = NA,
+    utm_northing = NA,
+    utm_zone = NA,
+    study_local_timestamp = NA,
+    study_timezone = NA,
+    tracking = FALSE)
+```
+
+#TRACKING DATA
+```{r Movebank Data}
+#Read in movebank file paths
+movebank_file_path <- as.data.frame(list.files(path = here("Movebank"), recursive = TRUE)) %>% 
+  dplyr::rename(path_name = `list.files(path = here("Movebank"), recursive = TRUE)`) %>% 
+  filter(!str_detect(path_name, 'citation.csv'),
+         !str_detect(path_name, 'data.csv'),
+         !str_detect(path_name, '.xlsx'))
+
+#create vector to store in
+movebank_vector <- as.vector(t(movebank_file_path))
+
+#create list to store data frame names (to be used in for loop below)
+datalist_2 = list()
+
+#loop to read in all the datasets in movebank folder
+for(i in 1:length(movebank_vector)) {
+  temp <- read.csv(paste0(glue("{dir_gdrive}/Global Ship Strike Analysis/Data/Raw Data/Public/Movebank/"), movebank_vector[i])) %>%
+    mutate(utm.easting = if("utm.easting" %in% colnames(.)) utm.easting else NA) %>%  #if this specific column does not exist, this will cfreate it and populate NA values 
+    mutate(utm.northing = if("utm.northing" %in% colnames(.)) utm.northing else NA) %>%
+    mutate(utm.zone = if("utm.zone" %in% colnames(.)) utm.zone else NA) %>%
+    mutate(study.timezone = if("study.timezone" %in% colnames(.)) study.timezone else NA) %>%
+    mutate(study.local.timestamp = if("study.local.timestamp" %in% colnames(.)) study.local.timestamp else NA) %>%
+    mutate(argos.lc = if("argos.lc" %in% colnames(.)) argos.lc else NA) %>%
+    dplyr::select(event.id, timestamp, visible, location.long, location.lat, argos.lc, sensor.type, individual.taxon.canonical.name, tag.local.identifier, individual.local.identifier, study.name, utm.easting, utm.northing, utm.zone, study.timezone, study.local.timestamp) %>%
+  separate(timestamp, into = c("date", "time"), sep = " ") %>%  #sepeare timestampe into date & time
+  mutate(date = ymd(date)) %>% 
+  filter(!is.na(location.long)) %>% #remove any records with NA values in longitude 
+  mutate(year = year(date),
+         month = month(date),
+         day = day(date))
+  
+  datalist_2[[i]] <- temp
+}
+
+#combine into one dataframe
+movebank_all = do.call(rbind, datalist_2) %>% 
+  clean_names() %>% 
+  dplyr::rename(
+    dataset_name = study_name,
+    event_date = date,
+    event_time = time,
+    latitude = location_lat,
+    longitude = location_long,
+    individual_local_id = individual_local_identifier,
+    species = individual_taxon_canonical_name,
+    tag_local_id = tag_local_identifier) %>% 
+  mutate(source = "Movebank",
+         subspecies = NA,
+         utc = FALSE,
+         date_formatted = event_date,
+         dataset_id = dataset_name,
+         utc = FALSE,
+         individual_count = NA,
+         basis_of_record = NA,
+         coordinate_uncertainty_m = NA,
+         coordinate_precision = NA,
+         issue = NA,
+         occurrence_status = NA,
+         sampling_protocol = NA,
+         sample_size_value = NA,
+         sample_size_unit = NA,
+         sampling_effort = NA,
+         start_day_of_year = NA,
+         end_day_of_year = NA,
+         year = NA,
+         month = NA,
+         day = NA,
+         footprint_wkt = NA,
+         footprint_srs = NA,
+         rights_holder = NA,
+         access_rights = NA,
+         rights = NA,
+         license = NA,
+         parent_event_id = NA,
+         field_number = NA,
+         field_notes = NA,
+         event_remarks = NA,
+         occurrence_id = NA,
+         organism_quantity = NA,
+         organism_quantity_type = NA,
+         date_1 = NA,
+         date_2 = NA,
+         y_only_1 = FALSE,
+         interval_length_days = NA,
+         y_m_only_1 = FALSE,
+         year_formatted = NA,
+         latitude_round = round(latitude, digits = 2),
+         longitude_round = round(longitude, digits = 2), 
+         date_downloaded = case_when(
+           dataset_name %in% "Blue whales Eastern North Pacific 1993-2008 - Argos data" ~ "2021-04-08", #add date downloaded for Movebnank data (forgot to do this in previous steps)
+           dataset_name %in% "Blue and fin whales Southern California 2014-2015 - Argos data" ~ "2021-04-08",
+           dataset_name %in% "Bowhead whale Admiralty Inlet" ~ "2021-04-08",
+           dataset_name %in% "Bowhead whale Cumberland Sound" ~ "2021-04-08", 
+           dataset_name %in% "Bowhead whale Foxe Basin" ~ "2021-04-08",
+           dataset_name %in% "Fin whales Gulf of California 2001 - Argos data" ~ "2021-04-08",  
+           dataset_name %in% "Sperm whales Gulf of California 2007-2008 - Argos data" ~ "2021-04-08", 
+           dataset_name %in% "Sperm whales Gulf of Mexico 2011-2013 - Argos data" ~ "2021-04-08",
+           dataset_name %in% "Sperm whales Gulf of California 2007-2008 - Fastloc GPS data" ~ "2021-04-20",
+           dataset_name %in% "Sperm whales Gulf of Mexico 2011-2013 - Fastloc GPS data" ~ "2021-04-20",
+           dataset_name %in% "Blue and fin whales Southern California 2014-2015 - Fastloc GPS data" ~ "2021-04-20",
+           dataset_name %in% "Azores Great Whales Satellite Telemetry Program" ~ "2021-04-08",
+           dataset_name %in% "Filtered Argos location data for pygmy blue whales 2009 and 2011" ~ "2022-06-06"),
+         species_common = case_when(
+           species %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+           species %in% "Balaenoptera musculus" ~ "Blue Whale",
+           species %in% "Balaena mysticetus" ~ "Bowhead Whale",
+           species %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+           species %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+           species %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+           species %in% "Balaenoptera physalus" ~ "Fin Whale",
+           species %in% "Eschrichtius robustus" ~ "Gray Whale",
+           species %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+           species %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+           species %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+           species %in% "Balaenoptera borealis" ~ "Sei Whale",
+           species %in% "Eubalaena australis" ~ "Southern Right Whale",
+           species %in% "Physeter macrocephalus" ~ "Sperm Whale"),
+         quarter_of_year = if_else(month < 4, "Jan-Mar", # bt 1-3
+                                   if_else(month >=4 & month < 7, "April-June", # b/t 4-6
+                                           if_else(month >=7 & month < 10, "July-Sep","Oct-Dec"))))
+    
+```
+
+```{r Australian Antarctic Tracking Data}
+#Read australian anatarctic data and cleanup names
+australian_antarctic <- read.csv(here("Australian Antarctic Data Center", "pbw_2009_2011_Argos_sp_filt.csv")) %>% 
+  clean_names() %>% 
+  filter(!is.na(longitude)) %>% 
+  dplyr::rename(
+         tag_local_id = ptt,
+         argos_lc = class,
+         study_local_timestamp = deploydate) %>% 
+  separate(gmt, into = c("event_date", "event_time"), sep = " ") %>% 
+  mutate(species = "Balaenoptera musculus",
+         subspecies = "Balaenoptera musculus brevicauda",
+         dataset_name = "Filtered Argos location data for pygmy blue whales 2009 and 2011",
+         source = "Australian Antarctic Data Centre",
+         event_date = dmy(event_date),
+         study_timezone = NA,
+         event_id = NA,
+         visible = NA,
+         sensor_type = NA,
+         individual_local_id = NA,
+         utm_easting = NA,
+         utm_northing = NA,
+         utm_zone = NA,
+         utc = FALSE,
+         date_formatted = event_date,
+         dataset_id = dataset_name,
+         utc = FALSE,
+         individual_count = NA,
+         basis_of_record = NA,
+         coordinate_uncertainty_m = NA,
+         coordinate_precision = NA,
+         issue = NA,
+         occurrence_status = NA,
+         sampling_protocol = NA,
+         sample_size_value = NA,
+         sample_size_unit = NA,
+         sampling_effort = NA,
+         start_day_of_year = NA,
+         end_day_of_year = NA,
+         year = NA,
+         month = NA,
+         day = NA,
+         footprint_wkt = NA,
+         footprint_srs = NA,
+         rights_holder = NA,
+         access_rights = NA,
+         rights = NA,
+         license = NA,
+         parent_event_id = NA,
+         field_number = NA,
+         field_notes = NA,
+         event_remarks = NA,
+         occurrence_id = NA,
+         organism_quantity = NA,
+         organism_quantity_type = NA,
+         date_1 = NA,
+         date_2 = NA,
+         y_only_1 = FALSE,
+         interval_length_days = NA,
+         y_m_only_1 = FALSE,
+         year_formatted = NA,
+         latitude_round = round(latitude, digits = 2),
+         longitude_round = round(longitude, digits = 2), 
+         date_downloaded = "2022-06-06",
+         species_common = case_when(
+           species %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+           species %in% "Balaenoptera musculus" ~ "Blue Whale",
+           species %in% "Balaena mysticetus" ~ "Bowhead Whale",
+           species %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+           species %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+           species %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+           species %in% "Balaenoptera physalus" ~ "Fin Whale",
+           species %in% "Eschrichtius robustus" ~ "Gray Whale",
+           species %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+           species %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+           species %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+           species %in% "Balaenoptera borealis" ~ "Sei Whale",
+           species %in% "Eubalaena australis" ~ "Southern Right Whale",
+           species %in% "Physeter macrocephalus" ~ "Sperm Whale"),
+         quarter_of_year = if_else(month < 4, "Jan-Mar", # bt 1-3
+                                   if_else(month >=4 & month < 7, "April-June", # b/t 4-6
+                                           if_else(month >=7 & month < 10, "July-Sep","Oct-Dec")))) %>% 
+  select(-filt)
+```
+
+```{r Tracking data from GBIF}
+## Clean tracking data from GBIF:
+gbif_tracking_clean <- gbif_tracking %>% 
+  filter(datasetKey %in% c("b86fe411-8e62-4cd0-aab2-914d75401598", "c8dd0161-7246-4c14-b205-fd82120df8de", "02647337-8eef-4673-b42b-b655b2140b77", "f353d213-008e-4ee1-835b-f30c17e261d6"),
+         basisOfRecord == "MACHINE_OBSERVATION") %>%
+    dplyr::select(datasetName, datasetKey, species,decimalLatitude, decimalLongitude, individualCount, basisOfRecord, coordinateUncertaintyInMeters, coordinatePrecision, issue, occurrenceStatus,eventDate,eventTime, eventID, samplingProtocol, sampleSizeValue, sampleSizeUnit, samplingEffort, startDayOfYear, endDayOfYear,year, month, day, footprintWKT, footprintSRS, rightsHolder, accessRights, rights, license,parentEventID, fieldNumber,fieldNotes, eventRemarks, occurrenceID,organismQuantity, organismQuantityType, identifier, year, month, day, georeferenceProtocol, organismID) %>% 
+  separate(identifier, into = c("tag_local_id_temp", "deployment", "individual_local_id"), sep = ":") %>% 
+  clean_names() %>% 
+  mutate(
+    species_common = case_when(
+      species %in% "Balaenoptera bonaerensis" ~ "Antarctic Minke Whale",
+      species %in% "Balaenoptera musculus" ~ "Blue Whale",
+      species %in% "Balaena mysticetus" ~ "Bowhead Whale",
+      species %in% "Balaenoptera brydei" ~ "Bryde's Whale",
+      species %in% "Balaenoptera edeni" ~ "Bryde's Whale",
+      species %in% "Balaenoptera acutorostrata" ~ "Common Minke Whale",
+      species %in% "Balaenoptera physalus" ~ "Fin Whale",
+      species %in% "Eschrichtius robustus" ~ "Gray Whale",
+      species %in% "Megaptera novaeangliae" ~ "Humpback Whale",
+      species %in% "Eubalaena glacialis" ~ "North Atlantic Right Whale",
+      species %in% "Eubalaena japonica" ~ "North Pacific Right Whale",
+      species %in% "Balaenoptera borealis" ~ "Sei Whale",
+      species %in% "Eubalaena australis" ~ "Southern Right Whale",
+      species %in% "Physeter macrocephalus" ~ "Sperm Whale"),
+    tag_local_id = case_when(
+      dataset_key %in% "f353d213-008e-4ee1-835b-f30c17e261d6" ~ organism_id,
+      dataset_key %in% "c8dd0161-7246-4c14-b205-fd82120df8de" ~ organism_id,
+      dataset_key %in% "02647337-8eef-4673-b42b-b655b2140b77" ~ organism_id,
+      dataset_key %in% "b86fe411-8e62-4cd0-aab2-914d75401598" ~ tag_local_id_temp,
+    ),
+    quarter_of_year = if_else(month < 4, "Jan-Mar", # bt 1-3
+                                   if_else(month >=4 & month < 7, "April-June", # b/t 4-6
+                                           if_else(month >=7 & month < 10, "July-Sep","Oct-Dec"))),
+    subspecies = NA,
+    source = "GBIF",
+    date_downloaded = "2021-11-15",
+    utm_easting = NA,
+    utm_northing = NA,
+    utm_zone = NA,
+    visible = NA,
+    sensor_type = "PTT",
+    date_formatted = make_date(year, month, day),
+    study_local_timestamp = NA,
+    study_timezone = NA,
+    utc = case_when(str_detect(event_time, pattern = "Z") ~ TRUE, 
+                    !str_detect(event_time, pattern = "Z") ~ FALSE,
+                    is.na(event_time) ~ FALSE),
+    start_day_of_year = NA,
+    end_day_of_year = NA,
+    date_1 = NA,
+    date_2 = NA,
+    y_only_1 = FALSE,
+    interval_length_days = NA,
+    y_m_only_1 = FALSE,
+    year_formatted = NA,
+    latitude = as.numeric(decimal_latitude),
+    longitude = as.numeric(decimal_longitude),
+    latitude_round = round(latitude, digits = 2),
+    longitude_round = round(longitude, digits = 2)) %>% 
+  dplyr::rename(
+    argos_lc = georeference_protocol,
+    dataset_id = dataset_key,
+    coordinate_uncertainty_m = coordinate_uncertainty_in_meters) %>% 
+  select(-decimal_latitude, -decimal_longitude , - deployment, -organism_id, -tag_local_id_temp)
+```
+
+```{r Combine tracking data}
+#Combine all tracking data
+tracking_all <- rbind(movebank_all, australian_antarctic, gbif_tracking_clean) %>% 
+  mutate(tracking = TRUE)
+
+#remove duplicates based on dataset, species, tag id -- this will keep the first record and remove any other subsequent duplicates. This removes any “erroneous” tagging data where a tag showed two locations for the same date and timestamp.
+tracking_rm_duplicates <- tracking_all %>%
+  distinct(dataset_name, species, tag_local_id, date_formatted, event_time, .keep_all = TRUE)
+
+#remove duplicates based on lat ,longitude, species, date, time, and tag ID
+tracking_final <- tracking_rm_duplicates %>% 
+  distinct(latitude, longitude, tag_local_id, date_formatted, event_time, species, .keep_all = TRUE)
+```
+
+#FINAL DATASET
+```{r Combine tracking and nontracking data & save}
+#Combine tracking & non-tracking data into one dataset 
+all_combined_data <- rbind(combined_df_clean, tracking_final)
+
+#Save as a CSV on Google Drive
+write.csv(all_combined_data, "cleaned_public_data.csv")
+```
+
