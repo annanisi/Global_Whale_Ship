@@ -3,6 +3,7 @@ Code and data for the article: "Ship collision risk threatens whales across the 
 
 Scripts: 
 * fit_ISDM.R: Worked example code to fit whale integrated species distribution model (ISDM) incorporating survey, sightings, whaling records, and tagging data. Code includes data formatting and setup, model fitting, model validation, and spatial prediction. Example data is for blue whales in the North Pacific Ocean (see below: blue_whale_north_pacific_isdm_data.csv, prediction_data_north_pacific/prediction_data_x.csv)
+* public_location_data.Rmd: This markdown script collates downloadable location data from the following sources: the Global Biodiversity Information Facility (GBIF), Ocean Biodiversity Information System (OBIS), Spatial Ecological Analysis of Megavertebrate Populations (OBIS-SEAMAP), California Department of Fish and Wildlife, MoveBank, and Australian Antarctic Data Center).
 
 Data and metadata: 
 * blue_whale_north_pacific_isdm_data.csv: Example data for fitting whale ISDM, using the fit_ISDM.R. This dataset contains blue whale presence and background points with environmental covariates for the North Pacific Ocean. Environmental covariates (mld, PPupper200m, sla, sst, sst_sd, bathy, bathy_sd) were from CMEMS as detailed in manuscript. 
