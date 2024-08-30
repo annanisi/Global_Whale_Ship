@@ -91,8 +91,7 @@ Email: anisi@uw.edu
     * latitude: latitude of grid cell center
     * shipping_density: Mean (across years 2017-2022) cumulative distance traveled by non-fishing vessels >300GT within each grid cell
     * shipping_density_speed_weighted: Mean (across years 2017-2022) cumulative speed-weighted distance traveled by non-fishing vessels >300GT within each grid cell. Following Redfern et al. 2024, speed-weighted distance is calculated for each vessel track by multiplying the length of the vessel track with the probability that a collision would be lethal based on vessel speed (Conn and Silber 2013). 
-    * 
-    * 
+
 ### DATA-SPECIFIC INFORMATION FOR: blue_whale_isdm_data.csv
 
 1. Number of variables: 12
@@ -191,6 +190,6 @@ Email: anisi@uw.edu
     * bathy: bathymetry (m), from ETOPO1 Global Relief Model. 
     * bathy_sd: rugosity (a proxy for seabed complexity calculated as standard deviation of bathymetry; m), calculated from ETOPO1 Global Relief Model. 
 
-# References
+### References:
 * P. B. Conn, G. K. Silber, Vessel speed restrictions reduce risk of collision-related mortality for North Atlantic right whales. Ecosphere 4, art43 (2013).
 * J. V. Redfern, B. C. Hodge, D. E. Pendleton, A. R. Knowlton, J. Adams, E. M. Patterson, C. P. Good, J. J. Roberts, Estimating reductions in the risk of vessels striking whales achieved by management strategies. Biological Conservation, 110427 (2024).
