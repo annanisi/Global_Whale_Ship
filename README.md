@@ -4,8 +4,11 @@
 Code and data for the article: "Ship collision risk threatens whales across the world’s oceans"
 
 ### AUTHOR INFORMATION:
+
 Name: Anna C. Nisi
+
 Institution: University of Washington
+
 Email: anisi@uw.edu
 
 ### DATA AND FILE OVERVIEW:
