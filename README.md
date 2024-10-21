@@ -81,7 +81,7 @@ Email: anisi@uw.edu
     * sperm.hotspot.protected.mandatory: whether a sperm whale hotspot (99% definition) overlaps with a mandatory management measure
     * all.space.use: Mean space-use index across the four species for each grid cell 
     * all.risk: Mean ship-strike risk index across the four species for each grid cell
-    * hotspot.overlap: How many species share a ship-strike risk hotspot in this grid cell
+    * hotspot.overlap: How many species share a ship-strike risk hotspot (99% definition) in this grid cell
  
 ### DATA-SPECIFIC INFORMATION FOR: shipping_density.csv
 
@@ -92,7 +92,7 @@ Email: anisi@uw.edu
 3. Variable list
     * longitude: longitude of the grid cell center (-180-180)
     * latitude: latitude of grid cell center
-    * shipping_density: Mean (across years 2017-2022) cumulative distance traveled by non-fishing vessels >300GT within each grid cell
+    * shipping_density: Mean (across years 2017-2022) cumulative distance traveled (km) by non-fishing vessels >300GT within each grid cell
     * shipping_density_speed_weighted: Mean (across years 2017-2022) cumulative speed-weighted distance traveled by non-fishing vessels >300GT within each grid cell. Following Redfern et al. 2024, speed-weighted distance is calculated for each vessel track by multiplying the length of the vessel track with the probability that a collision would be lethal based on vessel speed (Conn and Silber 2013). 
 
 ### DATA-SPECIFIC INFORMATION FOR: blue_whale_isdm_data.csv
@@ -110,7 +110,7 @@ Email: anisi@uw.edu
     * mld: mixed layer depth (m), from CMEMS.
     * PPupper200m: net primary production (mg m-3 day-1) from CMEMS.
     * sla: sea level anomaly (m), from CMEMS.
-    * sst: sea surface temperature (°C).
+    * sst: sea surface temperature (°C), from CMEMS.
     * sst_sd: the spatial standard deviation of sea surface temperature (a proxy for frontal activity; °C), calculated from CMEMS SST.
     * bathy:  bathymetry (m), from ETOPO1 Global Relief Model.
     * bathy_sd: rugosity (a proxy for seabed complexity calculated as standard deviation of bathymetry; m), from ETOPO1 Global Relief Model.
@@ -130,7 +130,7 @@ Email: anisi@uw.edu
     * mld: mixed layer depth (m), from CMEMS.
     * PPupper200m: net primary production (mg m-3 day-1) from CMEMS.
     * sla: sea level anomaly (m), from CMEMS.
-    * sst: sea surface temperature (°C).
+    * sst: sea surface temperature (°C), from CMEMS.
     * sst_sd: the spatial standard deviation of sea surface temperature (a proxy for frontal activity; °C), calculated from CMEMS SST.
     * bathy:  bathymetry (m), from ETOPO1 Global Relief Model.
     * bathy_sd: rugosity (a proxy for seabed complexity calculated as standard deviation of bathymetry; m), from ETOPO1 Global Relief Model.  
@@ -150,7 +150,7 @@ Email: anisi@uw.edu
     * mld: mixed layer depth (m), from CMEMS.
     * PPupper200m: net primary production (mg m-3 day-1) from CMEMS.
     * sla: sea level anomaly (m), from CMEMS.
-    * sst: sea surface temperature (°C).
+    * sst: sea surface temperature (°C), from CMEMS.
     * sst_sd: the spatial standard deviation of sea surface temperature (a proxy for frontal activity; °C), calculated from CMEMS SST.
     * bathy:  bathymetry (m), from ETOPO1 Global Relief Model.
     * bathy_sd: rugosity (a proxy for seabed complexity calculated as standard deviation of bathymetry; m), from ETOPO1 Global Relief Model.
@@ -169,7 +169,7 @@ Email: anisi@uw.edu
     * mld: mixed layer depth (m), from CMEMS.
     * PPupper200m: net primary production (mg m-3 day-1) from CMEMS.
     * sla: sea level anomaly (m), from CMEMS.
-    * sst: sea surface temperature (°C).
+    * sst: sea surface temperature (°C), from CMEMS.
     * sst_sd: the spatial standard deviation of sea surface temperature (a proxy for frontal activity; °C), calculated from CMEMS SST.
     * bathy:  bathymetry (m), from ETOPO1 Global Relief Model.
     * bathy_sd: rugosity (a proxy for seabed complexity calculated as standard deviation of bathymetry; m), from ETOPO1 Global Relief Model.
